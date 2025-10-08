@@ -1,0 +1,442 @@
+services:
+  kafka:
+    image: apache/kafka:3.9.1
+    container_name: kafka
+    ports:
+      - "9092:9092"
+      - "9093:9093"
+    environment:
+      KAFKA_PROCESS_ROLES: "broker, controller"
+      KAFKA_NODE_ID: 1
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://localhost:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+    healthcheck:
+      test: ["CMD", "bash", "-c", "echo > /dev/tcp/localhost/9092"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - app-network
+
+  fastapi-app:
+    build:
+      context: ./minio
+      dockerfile: Dockerfile
+    container_name: fastapi_service
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env.minio
+    depends_on:
+      minio:
+        condition: service_started
+      minio-init:
+        condition: service_completed_successfully
+    networks:
+      - app-network
+
+  minio:
+    image: minio/minio:latest
+    container_name: minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    env_file:
+      - .env.minio
+    command: server /data --console-address ":9001"
+    networks:
+      - app-network
+
+  # Init container to create buckets
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      - minio
+    entrypoint: ["/bin/sh","/init.sh"]
+    volumes:
+      - ./minio-init.sh:/init.sh:ro
+    networks:
+      - app-network
+    restart: "no"
+
+  postgres:
+    image: postgres:13
+    environment:
+      POSTGRES_USER: mlflow
+      POSTGRES_PASSWORD: mlflow
+      POSTGRES_DB: mlflow
+    ports:
+      - "5432:5432"
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mlflow -d mlflow"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  mlflow:
+    build: ./mlflow
+    ports:
+      - "5000:5000"
+    environment:
+      - MLFLOW_S3_ENDPOINT_URL=http://minio:9000
+      - MLFLOW_TRACKING_URI=http://localhost:5000
+      - AWS_ACCESS_KEY_ID=minioadmin
+      - AWS_SECRET_ACCESS_KEY=minioadmin
+      - AWS_S3_ADDRESSING_STYLE=path
+      - AWS_DEFAULT_REGION=us-east-1
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    networks:
+      - app-network
+    command: >
+      mlflow server
+      --backend-store-uri postgresql://mlflow:mlflow@postgres/mlflow
+      --default-artifact-root s3://mlflow
+      --host 0.0.0.0
+      --port 5000
+
+  eda:
+    build: ./eda_container
+    ports:
+      - "8010:8010"
+    environment:
+      - GATEWAY_URL=http://fastapi-app:8000
+    depends_on:
+      fastapi-app:
+        condition: service_started
+      minio-init:
+        condition: service_completed_successfully
+    networks:
+      - app-network
+
+  preprocess:
+    build: ./preprocess_container
+    ports:
+      - "8020:8020"
+    volumes:
+      - ./preprocess_config.json:/app/config.json:ro
+    environment:
+      - GATEWAY_URL=http://fastapi-app:8000
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - PRODUCER_TOPIC_0=training-data
+      - PRODUCER_TOPIC_1=inference-data
+      - CONFIG_PATH=/app/config.json
+      - IDENTIFIER=${IDENTIFIER}
+      - DATASET_NAME=PobleSec
+      - SAMPLE_TRAIN_ROWS=51
+      - SAMPLE_TEST_ROWS=31
+      - SAMPLE_STRATEGY=head
+      - SAMPLE_SEED=45
+      - FORCE_REPROCESS=1
+      - EXTRA_HASH_SALT=forceInfer1
+    depends_on:
+      fastapi-app:
+        condition: service_started
+      kafka:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    networks:
+      - common
+      - app-network
+    extra_hosts:
+      - "coordinator:host-gateway"
+
+  train:
+    build: ./train_container
+    ports:
+      - "8021:8021"
+    depends_on:
+      mlflow:
+        condition: service_started
+      kafka:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    environment:
+      - GATEWAY_URL=http://fastapi-app:8000
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - CONSUMER_TOPIC=training-data
+      - CONSUMER_GROUP_ID=train
+      - PRODUCER_TOPIC=model-training
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+      - MLFLOW_S3_ENDPOINT_URL=http://minio:9000
+      - AWS_ACCESS_KEY_ID=minioadmin
+      - AWS_SECRET_ACCESS_KEY=minioadmin
+      - AWS_S3_ADDRESSING_STYLE=path
+      - AWS_DEFAULT_REGION=us-east-1
+      - MODEL_TYPE=GRU
+      - TRAIN_TEST_SPLIT=0.8
+      - INPUT_SEQ_LEN=10
+      - OUTPUT_SEQ_LEN=1
+      - HIDDEN_SIZE=128
+      - NUM_LAYERS=3
+      - MODEL_DIM=128
+      - NUM_HEADS=8
+      - FEEDFORWARD_DIM=512
+      - DROPOUT=0.2
+      - LAYER_ARCHITECTURE=[32, 64, 128, 256]
+      - KERNEL_SIZE=2
+      - BATCH_SIZE=32
+      - EPOCHS=50
+      - EARLY_STOPPING=True
+      - PATIENCE=30
+      - LEARNING_RATE=1e-4
+    networks:
+      - app-network
+
+  train_gru:
+    build: ./train_container
+    depends_on:
+      mlflow:
+        condition: service_started
+      kafka:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    environment:
+      - GATEWAY_URL=http://fastapi-app:8000
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - CONSUMER_TOPIC=training-data
+      - CONSUMER_GROUP_ID=train-gru
+      - PRODUCER_TOPIC=model-training
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+      - MLFLOW_S3_ENDPOINT_URL=http://minio:9000
+      - AWS_ACCESS_KEY_ID=minioadmin
+      - AWS_SECRET_ACCESS_KEY=minioadmin
+      - AWS_S3_ADDRESSING_STYLE=path
+      - AWS_DEFAULT_REGION=us-east-1
+      - MODEL_TYPE=GRU
+      - TRAIN_TEST_SPLIT=0.8
+      - INPUT_SEQ_LEN=10
+      - OUTPUT_SEQ_LEN=1
+      - HIDDEN_SIZE=128
+      - NUM_LAYERS=3
+      - BATCH_SIZE=32
+      - EPOCHS=3
+      - EARLY_STOPPING=True
+      - PATIENCE=30
+      - LEARNING_RATE=1e-4
+      - FAILURE_MAX_RETRIES=3
+      - IDENTIFIER=${IDENTIFIER}
+      - ENABLE_XAI=false
+      - DEFAULT_CONFIG_HASH=baseline
+      - SKIP_DUPLICATE_CONFIGS=1
+      - DUP_CACHE_MAX=500
+    networks:
+      - app-network
+
+  train_lstm:
+    build: ./train_container
+    depends_on:
+      mlflow:
+        condition: service_started
+      kafka:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    environment:
+      - GATEWAY_URL=http://fastapi-app:8000
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - CONSUMER_TOPIC=training-data
+      - CONSUMER_GROUP_ID=train-lstm
+      - PRODUCER_TOPIC=model-training
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+      - MLFLOW_S3_ENDPOINT_URL=http://minio:9000
+      - AWS_ACCESS_KEY_ID=minioadmin
+      - AWS_SECRET_ACCESS_KEY=minioadmin
+      - AWS_S3_ADDRESSING_STYLE=path
+      - AWS_DEFAULT_REGION=us-east-1
+      - MODEL_TYPE=LSTM
+      - TRAIN_TEST_SPLIT=0.8
+      - INPUT_SEQ_LEN=10
+      - OUTPUT_SEQ_LEN=1
+      - HIDDEN_SIZE=128
+      - NUM_LAYERS=3
+      - BATCH_SIZE=32
+      - EPOCHS=3
+      - EARLY_STOPPING=True
+      - PATIENCE=30
+      - LEARNING_RATE=1e-4
+      - FAILURE_MAX_RETRIES=3
+      - IDENTIFIER=${IDENTIFIER}
+      - ENABLE_XAI=false
+      - DEFAULT_CONFIG_HASH=baseline
+      - SKIP_DUPLICATE_CONFIGS=1
+      - DUP_CACHE_MAX=500
+    networks:
+      - app-network
+  
+  locust:
+    image: locustio/locust:latest
+    depends_on:
+      fastapi-app:
+        condition: service_started
+      kafka:
+        condition: service_healthy
+    working_dir: /mnt/locust
+    volumes:
+      - ./locust:/mnt/locust
+    environment:
+      - LOCUST_TRUNCATE_LOG=1
+      - GATEWAY_BASE=http://fastapi-app:8000
+      - ENDPOINT_DOWNLOAD=http://fastapi-app:8000/download/processed-data/test_processed_data.parquet
+      - ENDPOINT_DOWNLOAD_ALT=http://fastapi-app:8000/download/processed-data/processed_data.parquet
+    command: ["-f", "/mnt/locust/locustfile.py", "--host", "http://inference:8000"]
+    ports:
+      - "8089:8089"
+      - "5557:5557"
+      - "5558:5558"
+    networks:
+      - app-network
+
+  locust-worker:
+    image: locustio/locust:latest
+    depends_on:
+      locust:
+        condition: service_started
+    working_dir: /mnt/locust
+    environment:
+      - LOCUST_HOST=http://fastapi-app:8000
+    volumes:
+      - ./locust:/mnt/locust
+    command: ["-f", "/mnt/locust/locustfile.py", "--worker", "--master-host", "locust"]
+    networks:
+      - app-network
+
+  inference:
+    build: ./inference_container
+    ports:
+      - "8023:8000"
+    depends_on:
+      kafka:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    environment:
+      - GATEWAY_URL=http://fastapi-app:8000
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+      - MLFLOW_S3_ENDPOINT_URL=http://minio:9000
+      - TQDM_DISABLE=1
+      - AWS_ACCESS_KEY_ID=minioadmin
+      - AWS_SECRET_ACCESS_KEY=minioadmin
+      - AWS_S3_ADDRESSING_STYLE=path
+      - AWS_DEFAULT_REGION=us-east-1
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - CONSUMER_TOPIC_0=inference-data
+      - CONSUMER_TOPIC_1=model-training
+      - CONSUMER_GROUP_ID=batch-forecasting-v2
+      - PRODUCER_TOPIC=performance-eval
+      - IDENTIFIER=${IDENTIFIER}
+      - INFERENCE_LOG_BUCKET=inference-logs
+      - SAMPLE_IDX=0
+      - INFERENCE_LENGTH=10
+      - PROMOTION_TOPIC=model-selected
+      - RUN_INFERENCE_ON_TRAIN_SUCCESS=1
+      - DISABLE_STARTUP_INFERENCE=1
+      - PREDICT_PROGRESS_INTERVAL=0
+      # Added concurrency / readiness / pre-warm controls
+      - WAIT_FOR_MODEL=1
+      - MODEL_WAIT_TIMEOUT=5
+      - INFERENCE_PREWARM=1
+      - QUEUE_WORKERS=2
+      - QUEUE_MAXSIZE=40
+      - INFERENCE_TIMEOUT=15
+    networks:
+      - common
+      - app-network
+    # Druid coordinator host mapping removed
+
+  eval:
+    build: ./eval_container
+    depends_on:
+      mlflow:
+        condition: service_started
+      kafka:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - MODEL_TRAINING_TOPIC=model-training
+      - MODEL_SELECTED_TOPIC=model-selected
+      - DLQ_MODEL_SELECTED=DLQ-model-selected
+      - EVAL_GROUP_ID=eval-promoter-r5
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+      - MLFLOW_S3_ENDPOINT_URL=http://minio:9000
+      - AWS_ACCESS_KEY_ID=minioadmin
+      - AWS_SECRET_ACCESS_KEY=minioadmin
+      - AWS_S3_ADDRESSING_STYLE=path
+      - AWS_DEFAULT_REGION=us-east-1
+      - GATEWAY_URL=http://fastapi-app:8000
+      - PROMOTION_BUCKET=model-promotion
+      - LOOKBACK_RUNS=50
+      - IDENTIFIER=${IDENTIFIER}
+      - EXPECTED_MODEL_TYPES=GRU,LSTM,PROPHET
+    networks:
+      - app-network
+    ports:
+      - "8050:8050"
+
+  nonml_prophet:
+    build: ./nonML_container
+    depends_on:
+      mlflow:
+        condition: service_started
+      kafka:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    environment:
+      - GATEWAY_URL=http://fastapi-app:8000
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - CONSUMER_TOPIC=training-data
+      - CONSUMER_GROUP_ID=nonml-prophet
+      - PRODUCER_TOPIC=model-training
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+      - MLFLOW_S3_ENDPOINT_URL=http://minio:9000
+      - AWS_ACCESS_KEY_ID=minioadmin
+      - AWS_SECRET_ACCESS_KEY=minioadmin
+      - AWS_S3_ADDRESSING_STYLE=path
+      - AWS_DEFAULT_REGION=us-east-1
+      - MODEL_TYPE=PROPHET
+      - TRAIN_TEST_SPLIT=0.8
+      - OUTPUT_SEQ_LEN=1
+      - FAILURE_MAX_RETRIES=3
+      - IDENTIFIER=${IDENTIFIER}
+      # Prophet hyperparams (override as needed)
+      - N_CHANGEPOINTS=25
+      - CHANGEPOINT_RANGE=0.8
+      - YEARLY_SEASONALITY=auto
+      - WEEKLY_SEASONALITY=auto
+      - DAILY_SEASONALITY=auto
+      - SEASONALITY_MODE=additive
+      - SEASONALITY_PRIOR_SCALE=10
+      - HOLIDAYS_PRIOR_SCALE=10
+      - CHANGEPOINT_PRIOR_SCALE=0.05
+      - COUNTRY=US
+      - SKIP_DUPLICATE_CONFIGS=1
+      - DUP_CACHE_MAX=500
+    networks:
+      - app-network
+
+networks:
+  common:
+    external: true
+  app-network:
+    driver: bridge
+
+volumes:
+  minio_data:

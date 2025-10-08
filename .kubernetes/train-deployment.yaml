@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    kompose.cmd: C:\ProgramData\chocolatey\lib\kubernetes-kompose\tools\kompose.exe convert
+    kompose.version: 1.36.0 (ae2a39403)
+  labels:
+    io.kompose.service: train
+  name: train
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      io.kompose.service: train
+  template:
+    metadata:
+      annotations:
+        kompose.cmd: C:\ProgramData\chocolatey\lib\kubernetes-kompose\tools\kompose.exe convert
+        kompose.version: 1.36.0 (ae2a39403)
+      labels:
+        io.kompose.service: train
+    spec:
+      initContainers:
+        - name: wait-for-kafka
+          image: busybox:1.36
+          command: ['sh', '-c', 'echo Waiting for Kafka...; while ! nc -z kafka 9092; do sleep 1; done; echo Kafka is up!']
+      containers:
+        - env:
+            - name: AWS_ACCESS_KEY_ID
+              value: minioadmin
+            - name: AWS_SECRET_ACCESS_KEY
+              value: minioadmin
+            - name: CONSUMER_GROUP_ID
+              value: '"lstm"'
+            - name: CONSUMER_TOPIC
+              value: training-data
+            - name: GATEWAY_URL
+              value: http://fastapi-app:8000
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: kafka:9092
+            - name: MLFLOW_S3_ENDPOINT_URL
+              value: http://minio:9000
+            - name: MLFLOW_TRACKING_URI
+              value: http://mlflow:5000
+            - name: PRODUCER_TOPIC
+              value: model-training
+          image: train
+          imagePullPolicy: IfNotPresent
+          name: train
+          ports:
+            - containerPort: 8021
+              protocol: TCP
+      restartPolicy: Always

@@ -1,0 +1,19 @@
+
+# requirements.txt
+--extra-index-url https://download.pytorch.org/whl/cpu
+# Use CPU-only torch build (only here to speed up the build process during development)
+# For GPU support, use the appropriate torch version for your CUDA setup
+torch==2.7.1+cpu
+
+
+scikit-learn==1.7.1
+numpy==2.2.6
+pandas==2.3.2
+psutil==7.0.0
+pyarrow==20.0.0
+mlflow[extras]==3.3.1
+kafka-python[crc32c]==2.2.15
+carbontracker==2.3.1
+transformers==4.56.0
+captum
+boto3==1.34.74

@@ -1,0 +1,15 @@
+# requirements.txt
+
+fastapi==0.115.13
+uvicorn==0.34.3
+jinja2==3.1.4
+colorcet==3.1.0
+dcor==0.6.0
+matplotlib==3.10.3
+numpy==2.2.6
+pandas==2.3.0
+requests
+scikit-learn==1.7.0
+scipy==1.15.3
+seaborn==0.13.2
+statsmodels==0.14.0

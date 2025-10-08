@@ -1,0 +1,5 @@
+As a rule of thumb, provide at least twice as much training data as you intend to forecast.
+
+A more nuanced answer considers seasonality: you need a few full seasonality cycles to properly model the seasonality patterns and distinguish them from other terms (e.g. growth). For example, if yearly seasonality is important to your problem, then provide at least 2 years of data.
+
+You can still create a forecast with fewer data points, e.g. 1 year for yearly seasonality, but it may be more challenging to train a good model or do proper historical validation.

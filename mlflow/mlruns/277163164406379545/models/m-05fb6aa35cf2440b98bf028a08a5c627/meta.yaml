@@ -1,0 +1,10 @@
+artifact_location: file:C:/Users/arde/Projects/FL/FLTS/mlflow_container/mlruns/277163164406379545/models/m-05fb6aa35cf2440b98bf028a08a5c627/artifacts
+creation_timestamp: 1752189686865
+experiment_id: '277163164406379545'
+last_updated_timestamp: 1752189689744
+model_id: m-05fb6aa35cf2440b98bf028a08a5c627
+model_type: ''
+name: test_lstm_model
+source_run_id: 260a81d5967847148c6666692ed0c73d
+status: 2
+status_message: null

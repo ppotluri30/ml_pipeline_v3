@@ -1,0 +1,95 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    io.kompose.service: kafka
+  name: kafka
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      io.kompose.service: kafka
+  template:
+    metadata:
+      labels:
+        io.kompose.service: kafka
+    spec:
+      containers:
+        - env:
+            # KRaft-specific configurations
+            - name: KAFKA_PROCESS_ROLES
+              value: "broker,controller"
+            - name: KAFKA_NODE_ID
+              value: "1"
+            - name: KAFKA_CONTROLLER_QUORUM_VOTERS
+              value: "1@localhost:9093"
+            - name: KAFKA_LISTENERS
+              value: "PLAINTEXT://:9092,CONTROLLER://localhost:9093"  # Use localhost for controller
+            - name: KAFKA_CONTROLLER_LISTENER_NAMES
+              value: "CONTROLLER"
+            - name: KAFKA_ADVERTISED_LISTENERS
+              value: "PLAINTEXT://kafka:9092"
+            - name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP
+              value: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT"
+            - name: KAFKA_INTER_BROKER_LISTENER_NAME
+              value: "PLAINTEXT"
+            - name: KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR
+              value: "1"
+            - name: KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS
+              value: "0"
+            - name: KAFKA_LOG_LEVEL
+              value: "INFO"
+            - name: KAFKA_LOG_DIRS
+              value: "/tmp/kraft-combined-logs"  # Explicit log directory
+          image: apache/kafka:3.9.1
+          name: kafka
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "500m"
+          readinessProbe:
+            tcpSocket:
+              port: 9092
+            initialDelaySeconds: 30  # Increased delay for KRaft initialization
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 5  # Increased failure threshold
+          livenessProbe:
+            tcpSocket:
+              port: 9092
+            initialDelaySeconds: 45
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          ports:
+            - containerPort: 9092
+              protocol: TCP
+            - containerPort: 9093
+              protocol: TCP
+          volumeMounts:
+            - name: kafka-storage
+              mountPath: /tmp/kraft-combined-logs
+      volumes:
+        - name: kafka-storage
+          emptyDir: {}
+      restartPolicy: Always
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka
+  labels:
+    io.kompose.service: kafka
+spec:
+  ports:
+    - name: kafka-port
+      port: 9092
+      targetPort: 9092
+      protocol: TCP
+  selector:
+    io.kompose.service: kafka
+  type: ClusterIP

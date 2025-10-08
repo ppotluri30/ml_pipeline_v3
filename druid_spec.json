@@ -1,0 +1,20 @@
+﻿{
+  "type": "index_parallel",
+  "spec": {
+    "dataSchema": {
+      "dataSource": "test_ingest",
+      "timestampSpec": { "column": "time", "format": "iso" },
+      "dimensionsSpec": { "dimensions": ["down","up"] },
+      "granularitySpec": { "segmentGranularity": "DAY", "queryGranularity": "MINUTE", "rollup": false }
+    },
+    "ioConfig": {
+      "type": "index_parallel",
+      "inputSource": {
+        "type": "inline",
+        "data": "{ \"time\": \"2018-02-28T02:54:00.000Z\", \"down\": 1, \"up\": 2 }\n{ \"time\": \"2018-02-28T02:56:00.000Z\", \"down\": 3, \"up\": 4 }\n"
+      },
+      "inputFormat": { "type": "json" }
+    },
+    "tuningConfig": { "type": "index_parallel", "partitionsSpec": { "type": "dynamic" } }
+  }
+}

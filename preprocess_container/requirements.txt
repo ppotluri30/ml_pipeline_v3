@@ -1,0 +1,12 @@
+# requirements.txt
+
+numpy==2.2.6
+pandas==2.3.2
+scikit-learn==1.7.1
+pyarrow==20.0.0
+
+requests==2.32.4
+kafka-python[crc32c]==2.2.15
+fastapi==0.115.0
+uvicorn==0.30.6
+tenacity==8.5.0

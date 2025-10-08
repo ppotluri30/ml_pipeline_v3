@@ -1,0 +1,4 @@
+Method,Name,Error,Occurrences
+GET,inference-discovery,HTTPError('404 Client Error: Not Found for url: inference-discovery'),3
+POST,inference-discovery,HTTPError('404 Client Error: Not Found for url: inference-discovery'),2
+GET,download_processed,"ConnectionResetError(104, 'Connection reset by peer')",1

@@ -1,0 +1,2 @@
+# Add extra Python dependencies for custom test logic here
+# (The base locustio/locust image already includes Locust and its core deps)

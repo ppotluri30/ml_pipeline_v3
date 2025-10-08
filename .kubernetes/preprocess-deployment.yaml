@@ -1,0 +1,40 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  annotations:
+    kompose.cmd: C:\ProgramData\chocolatey\lib\kubernetes-kompose\tools\kompose.exe convert
+    kompose.version: 1.36.0 (ae2a39403)
+  labels:
+    io.kompose.service: preprocess
+  name: preprocess
+spec:
+  parallelism: 1
+  template:
+    metadata:
+      annotations:
+        kompose.cmd: C:\ProgramData\chocolatey\lib\kubernetes-kompose\tools\kompose.exe convert
+        kompose.version: 1.36.0 (ae2a39403)
+      labels:
+        io.kompose.service: preprocess
+    spec:
+      initContainers:
+        - name: wait-for-kafka
+          image: busybox:1.36
+          command: ['sh', '-c', 'echo Waiting for Kafka...; while ! nc -z kafka 9092; do sleep 1; done; echo Kafka is up!']
+      containers:
+        - env:
+            - name: GATEWAY_URL
+              value: http://fastapi-app:8000
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: kafka:9092
+            - name: PRODUCER_TOPIC_0
+              value: training-data
+            - name: PRODUCER_TOPIC_1
+              value: inference-data
+          image: preprocess
+          imagePullPolicy: IfNotPresent
+          name: preprocess
+          ports:
+            - containerPort: 8020
+              protocol: TCP
+      restartPolicy: OnFailure

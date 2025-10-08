@@ -1,0 +1,35 @@
+{
+    "data": {
+        "input_bucket": "dataset",
+        "train_file": "PobleSec.csv",
+        "test_file": "PobleSec_test.csv",
+        "output_bucket": "processed-data",
+        "output_train": "processed_data",
+        "output_test": "test_processed_data"
+    },
+    "preprocessing": {
+        "handle_nans": {
+            "enabled": true,
+            "threshold": 0.33,
+            "knn_neighbors": 2,
+            "drop_rows": false
+        },
+        "outliers": {
+            "enabled": false,
+            "method": "iqr",
+            "factor": 1.5
+        },
+        "time_features": {
+            "enabled": true
+        },
+        "lags": {
+            "enabled": false,
+            "n_lags": 0,
+            "step": 1
+        },
+        "scaling": {
+            "method": "MinMaxScaler",
+            "add_constant": null
+        }
+    }
+}

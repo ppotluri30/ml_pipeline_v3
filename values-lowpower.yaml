@@ -1,0 +1,2 @@
+﻿train:
+  resources: { requests: { cpu: "500m" }, limits: { cpu: "1" } }

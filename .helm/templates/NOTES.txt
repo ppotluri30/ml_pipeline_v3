@@ -1,0 +1,74 @@
+1. Get the application URLs by running these commands:
+
+{{- if .Values.ingress.enabled }}
+{{- range $host := .Values.ingress.hosts }}
+  {{- range .paths }}
+  http{{ if $.Values.ingress.tls }}s{{ end }}://{{ $host.host }}{{ .path }}
+  {{- end }}
+{{- end }}
+{{- else }}
+
+Druid Services:
+{{- if .Values.druid.enabled }}
+  Druid Router (Web Console):
+  kubectl port-forward svc/druid-router {{ .Values.druid.services.router.port }}:{{ .Values.druid.services.router.port }}
+  Access at: http://127.0.0.1:{{ .Values.druid.services.router.port }}
+{{- end }}
+
+{{- if .Values.druid.enabled }}
+  Druid Coordinator:
+  kubectl port-forward svc/druid-coordinator {{ .Values.druid.services.coordinator.port }}:{{ .Values.druid.services.coordinator.port }}
+  Access at: http://127.0.0.1:{{ .Values.druid.services.coordinator.port }}
+{{- end }}
+
+ML Platform Services:
+{{- if .Values.mlflow.enabled }}
+  MLflow:
+  kubectl port-forward svc/mlflow {{ .Values.mlflow.service.port }}:{{ .Values.mlflow.service.port }}
+  Access at: http://127.0.0.1:{{ .Values.mlflow.service.port }}
+{{- end }}
+
+{{- if .Values.superset.enabled }}
+  Apache Superset:
+  kubectl port-forward svc/superset {{ .Values.superset.service.port }}:{{ .Values.superset.service.port }}
+  Access at: http://127.0.0.1:{{ .Values.superset.service.port }}
+  Default login: admin / admin
+{{- end }}
+
+{{- if .Values.minio.enabled }}
+  MinIO Console:
+  kubectl port-forward svc/minio {{ .Values.minio.service.consolePort }}:{{ .Values.minio.service.consolePort }}
+  Access at: http://127.0.0.1:{{ .Values.minio.service.consolePort }}
+  Credentials: {{ .Values.minio.auth.accessKey }} / {{ .Values.minio.auth.secretKey }}
+{{- end }}
+
+Application Services:
+{{- if .Values.fastapi.enabled }}
+  FastAPI Gateway:
+  kubectl port-forward svc/fastapi-app {{ .Values.fastapi.service.port }}:{{ .Values.fastapi.service.port }}
+  Access at: http://127.0.0.1:{{ .Values.fastapi.service.port }}
+{{- end }}
+
+{{- end }}
+
+2. Check the status of your deployment:
+  kubectl get pods -l app.kubernetes.io/instance={{ .Release.Name }}
+
+3. Monitor logs:
+  kubectl logs -f deployment/druid-coordinator
+  kubectl logs -f deployment/kafka
+
+4. To scale services:
+  kubectl scale deployment druid-broker --replicas=2
+
+5. Storage information:
+{{- if .Values.persistence.enabled }}
+  Persistent volumes have been created for data persistence.
+  To see storage usage:
+  kubectl get pvc -l app.kubernetes.io/instance={{ .Release.Name }}
+{{- else }}
+  WARNING: Persistence is disabled. Data will be lost when pods are restarted.
+{{- end }}
+
+For more information, visit the documentation or check the deployment status with:
+  kubectl get all -l app.kubernetes.io/instance={{ .Release.Name }}

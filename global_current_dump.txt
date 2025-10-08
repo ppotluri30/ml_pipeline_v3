@@ -1,0 +1,1 @@
+﻿{"identifier":"","config_hash":"eab7f59ada0acba006771c40c8eae95f37648e24d610f023cb6f29175e93d952","run_id":"0f6814cee2934c6e9bfeb83bc6f610e8","model_type":"GRU","experiment":"Default","model_uri":"runs:/0f6814cee2934c6e9bfeb83bc6f610e8/GRU","timestamp":"2025-10-06T20:37:33Z","note":"manually injected pointer"}

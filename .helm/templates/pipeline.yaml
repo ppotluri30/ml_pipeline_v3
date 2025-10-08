@@ -1,0 +1,410 @@
+---
+# EDA Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: eda
+  labels:
+    app.kubernetes.io/name: eda
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.eda.service.port }}
+      targetPort: 8010
+      protocol: TCP
+      name: eda
+  selector:
+    app.kubernetes.io/name: eda
+    app.kubernetes.io/instance: {{ .Release.Name }}
+
+---
+# EDA Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: eda
+  labels:
+    app.kubernetes.io/name: eda
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: eda
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: eda
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      initContainers:
+        - name: wait-for-fastapi
+          image: busybox:1.35
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z fastapi-app 8000; do
+                echo "Waiting for FastAPI..."
+                sleep 2
+              done
+      containers:
+        - name: eda
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.eda.image.repository }}:{{ .Values.eda.image.tag }}"
+          imagePullPolicy: {{ .Values.global.pullPolicy }}
+          ports:
+            - name: eda
+              containerPort: 8010
+              protocol: TCP
+          env:
+            - name: GATEWAY_URL
+              value: "http://fastapi-app:{{ .Values.fastapi.service.port }}"
+
+---
+# Preprocessing Job
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: preprocess-{{ randAlphaNum 5 | lower }}
+  labels:
+    app.kubernetes.io/name: preprocess
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: preprocess
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      initContainers:
+        - name: wait-for-fastapi
+          image: busybox:1.35
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z fastapi-app 8000; do
+                echo "Waiting for FastAPI..."
+                sleep 2
+              done
+        - name: wait-for-kafka
+          image: busybox:1.35
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z kafka 9092; do
+                echo "Waiting for Kafka..."
+                sleep 2
+              done
+      containers:
+        - name: preprocess
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.preprocess.image.repository }}:{{ .Values.preprocess.image.tag }}"
+          imagePullPolicy: {{ .Values.global.pullPolicy }}
+          env:
+            - name: GATEWAY_URL
+              value: "http://fastapi-app:{{ .Values.fastapi.service.port }}"
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: "kafka:{{ .Values.kafka.service.port }}"
+            - name: PRODUCER_TOPIC_0
+              value: "{{ .Values.preprocess.kafka.topics.training }}"
+            - name: PRODUCER_TOPIC_1
+              value: "{{ .Values.preprocess.kafka.topics.inference }}"
+            - name: SCALER
+              value: "{{ .Values.preprocess.scaler }}"
+      restartPolicy: Never
+  backoffLimit: 3
+
+{{- if .Values.train.enabled }}
+---
+# Training Job
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: train-{{ randAlphaNum 5 | lower }}
+  labels:
+    app.kubernetes.io/name: train
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: train
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      initContainers:
+        - name: wait-for-mlflow
+          image: busybox:1.35
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z mlflow 5000; do
+                echo "Waiting for MLflow..."
+                sleep 2
+              done
+        - name: wait-for-kafka
+          image: edenhill/kcat:1.7.1
+          command:
+            - sh
+            - -c
+            - |
+              echo "Waiting for Kafka to become fully operational..."
+              # The until loop will continue until the kcat command succeeds.
+              # The 'kcat -b <broker> -L' command attempts to list metadata from the broker.
+              # This is a true readiness check because it will only succeed when the Kafka
+              # broker is active and serving client requests, not just listening on a port.
+              # The '-t 10' flag gives the command a 10-second timeout for the check itself.
+              until kcat -b kafka:9092 -L -t 10; do
+                echo "Kafka broker not ready yet, retrying in 5 seconds..."
+                sleep 5
+              done
+              echo "Success! Kafka is ready to accept connections."
+      containers:
+        - name: train
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.train.image.repository }}:{{ .Values.train.image.tag }}"
+          imagePullPolicy: {{ .Values.global.pullPolicy }}
+          resources:
+            requests:
+              cpu: "{{ .Values.train.resources.requests.cpu }}"
+            limits:
+              cpu: "{{ .Values.train.resources.limits.cpu }}"
+          env:
+            - name: GATEWAY_URL
+              value: "http://fastapi-app:{{ .Values.fastapi.service.port }}"
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: "kafka:{{ .Values.kafka.service.port }}"
+            - name: CONSUMER_TOPIC
+              value: "{{ .Values.train.kafka.consumerTopic }}"
+            - name: CONSUMER_GROUP_ID
+              value: "{{ .Values.train.kafka.consumerGroupId }}"
+            - name: PRODUCER_TOPIC
+              value: "{{ .Values.train.kafka.producerTopic }}"
+            - name: MLFLOW_TRACKING_URI
+              value: "http://mlflow:{{ .Values.mlflow.service.port }}"
+            - name: MLFLOW_S3_ENDPOINT_URL
+              value: "http://minio:{{ .Values.minio.service.apiPort }}"
+            - name: AWS_ACCESS_KEY_ID
+              value: "{{ .Values.minio.auth.accessKey }}"
+            - name: AWS_SECRET_ACCESS_KEY
+              value: "{{ .Values.minio.auth.secretKey }}"
+            - name: GIT_PYTHON_REFRESH
+              value: "quiet"
+
+            # Model configuration
+            - name: MODEL_TYPE
+              value: "{{ .Values.train.model.type }}"
+            - name: TRAIN_TEST_SPLIT
+              value: "{{ .Values.train.model.trainTestSplit }}"
+            - name: INPUT_SEQ_LEN
+              value: "{{ .Values.train.model.inputSeqLen }}"
+            - name: OUTPUT_SEQ_LEN
+              value: "{{ .Values.train.model.outputSeqLen }}"
+            - name: BATCH_SIZE
+              value: "{{ .Values.train.model.batchSize }}"
+            - name: EPOCHS
+              value: "{{ .Values.train.model.numEpochs }}"
+            - name: EARLY_STOPPING
+              value: "{{ .Values.train.model.earlyStopping }}"
+            - name: PATIENCE
+              value: "{{ .Values.train.model.patience }}"
+            - name: LEARNING_RATE
+              value: "{{ .Values.train.model.learningRate }}"
+            {{- if or (eq .Values.train.model.type "LSTM") (eq .Values.train.model.type "GRU") }}
+            {{- $modelParams := index .Values.train.model .Values.train.model.type }}
+            - name: HIDDEN_SIZE
+              value: "{{ $modelParams.hiddenSize }}"
+            - name: NUM_LAYERS
+              value: "{{ $modelParams.numLayers }}"
+            {{- end }}
+            {{- if eq .Values.train.model.type "TETS" }}
+            - name: MODEL_DIM
+              value: "{{ .Values.train.model.TETS.modelDim }}"
+            - name: NUM_HEADS
+              value: "{{ .Values.train.model.TETS.numHeads }}"
+            - name: FEEDFORWARD_DIM
+              value: "{{ .Values.train.model.TETS.feedforwardDim }}"
+            - name: DROPOUT
+              value: "{{ .Values.train.model.TETS.dropout }}"
+            {{- end }}
+            {{- if eq .Values.train.model.type "TCN" }}
+            - name: LAYER_ARCHITECTURE
+              value: "{{ .Values.train.model.TCN.layerArchitecture }}"
+            - name: KERNEL_SIZE
+              value: "{{ .Values.train.model.TCN.kernelSize }}"
+            - name: DROPOUT
+              value: "{{ .Values.train.model.TCN.dropout }}"
+            {{- end }}
+      restartPolicy: Never
+  backoffLimit: 3
+{{- end }}
+{{- if .Values.nonml.enabled }}
+---
+# Non-ML Job
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nonml-{{ randAlphaNum 5 | lower }}
+  labels:
+    app.kubernetes.io/name: nonml
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: nonml
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      initContainers:
+        - name: wait-for-kafka
+          image: busybox:1.35
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z kafka 9092; do
+                echo "Waiting for Kafka..."
+                sleep 2
+              done
+      containers:
+        - name: nonml
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.nonml.image.repository }}:{{ .Values.nonml.image.tag }}"
+          imagePullPolicy: {{ .Values.global.pullPolicy }}
+          env:
+            - name: GATEWAY_URL
+              value: "http://fastapi-app:{{ .Values.fastapi.service.port }}"
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: "kafka:{{ .Values.kafka.service.port }}"
+            - name: MLFLOW_TRACKING_URI
+              value: "http://mlflow:{{ .Values.mlflow.service.port }}"
+            - name: MLFLOW_S3_ENDPOINT_URL
+              value: "http://minio:{{ .Values.minio.service.apiPort }}"
+            - name: AWS_ACCESS_KEY_ID
+              value: "{{ .Values.minio.auth.accessKey }}"
+            - name: AWS_SECRET_ACCESS_KEY
+              value: "{{ .Values.minio.auth.secretKey }}"
+            - name: CONSUMER_TOPIC
+              value: "{{ .Values.nonml.kafka.consumerTopic }}"
+            - name: CONSUMER_GROUP_ID
+              value: "{{ .Values.nonml.kafka.consumerGroupId }}"
+            - name: PRODUCER_TOPIC
+              value: "{{ .Values.nonml.kafka.producerTopic }}"
+            - name: MODEL_TYPE
+              value: "{{ .Values.nonml.model.type }}"
+            - name: DOWNSAMPLING
+              value: "{{ .Values.nonml.model.downsampling }}"
+            - name: SEASON_LENGTH
+              value: "{{ .Values.nonml.model.seasonLength }}"
+      restartPolicy: Never
+  backoffLimit: 3
+{{- end }}
+
+---
+# Inference Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: inference
+  labels:
+    app.kubernetes.io/name: inference
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.inference.service.port }}
+      targetPort: 8023
+      protocol: TCP
+      name: inference
+  selector:
+    app.kubernetes.io/name: inference
+    app.kubernetes.io/instance: {{ .Release.Name }}
+
+---
+# Inference Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: inference
+  labels:
+    app.kubernetes.io/name: inference
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: inference
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: inference
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      initContainers:
+        - name: wait-for-kafka
+          image: busybox:1.35
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z kafka 9092; do
+                echo "Waiting for Kafka..."
+                sleep 2
+              done
+      containers:
+        - name: inference
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.inference.image.repository }}:{{ .Values.inference.image.tag }}"
+          imagePullPolicy: {{ .Values.global.pullPolicy }}
+          ports:
+            - name: inference
+              containerPort: 8023
+              protocol: TCP
+          env:
+            - name: GATEWAY_URL
+              value: "http://fastapi-app:{{ .Values.fastapi.service.port }}"
+            - name: MLFLOW_TRACKING_URI
+              value: "http://mlflow:{{ .Values.mlflow.service.port }}"
+            - name: MLFLOW_S3_ENDPOINT_URL
+              value: "http://minio:{{ .Values.minio.service.apiPort }}"
+            - name: TQDM_DISABLE
+              value: "1"
+            - name: AWS_ACCESS_KEY_ID
+              value: "{{ .Values.minio.auth.accessKey }}"
+            - name: AWS_SECRET_ACCESS_KEY
+              value: "{{ .Values.minio.auth.secretKey }}"
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: "kafka:{{ .Values.kafka.service.port }}"
+            - name: CONSUMER_TOPIC_0
+              value: "{{ index .Values.inference.kafka.consumerTopics 0 }}"
+            - name: CONSUMER_TOPIC_1
+              value: "{{ index .Values.inference.kafka.consumerTopics 1 }}"
+            - name: CONSUMER_GROUP_ID
+              value: "{{ .Values.inference.kafka.consumerGroupId }}"
+            - name: PRODUCER_TOPIC
+              value: "{{ .Values.inference.kafka.producerTopic }}"
+            - name: SAMPLE_IDX
+              value: "{{ .Values.inference.config.sampleIdx }}"
+            - name: INFERENCE_LENGTH
+              value: "{{ .Values.inference.config.inferenceLength }}"

@@ -1,0 +1,6 @@
+﻿[
+  {"op":"add","path":"/spec/template/spec/containers/0/env/-",
+   "value":{"name":"POD_IP","valueFrom":{"fieldRef":{"fieldPath":"status.podIP"}}}},
+  {"op":"add","path":"/spec/template/spec/containers/0/env/-",
+   "value":{"name":"JAVA_TOOL_OPTIONS","value":"-Ddruid.host=$(POD_IP) -Ddruid.worker.ip=$(POD_IP) -Djava.net.preferIPv4Stack=true"}}
+]
