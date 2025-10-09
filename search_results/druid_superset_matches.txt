@@ -1,0 +1,140 @@
+Druid and Superset references found in repository
+Generated: 2025-10-09
+
+--- DRUID REFERENCES (grouped by file) ---
+
+File: docker-compose.yaml
+  - "# Druid coordinator host mapping removed" (comment near inference service)
+
+File: druid/environment
+  - DRUID_XMX=1g
+  - DRUID_XMS=1g
+  - DRUID_MAXNEWSIZE=250m
+  - DRUID_NEWSIZE=250m
+  - DRUID_MAXDIRECTMEMORYSIZE=6172m
+  - druid_emitter_logging_logLevel=debug
+  - druid_extensions_loadList=["druid-histogram", "druid-datasketches", "druid-lookups-cached-global", "postgresql-metadata-storage"]
+  - druid_zk_service_host=zookeeper
+  - druid_metadata_storage_host=
+  - druid_metadata_storage_type=postgresql
+  - druid_metadata_storage_connector_connectURI=jdbc:postgresql://postgres:5432/druid
+  - druid_metadata_storage_connector_user=druid
+  - druid_metadata_storage_connector_password=FoolishPassword
+  - druid_coordinator_balancer_strategy=cost
+  - druid_indexer_runner_javaOptsArray=["-server", "-Xmx1g", "-Xms1g", "-XX:MaxDirectMemorySize=3g", "-Duser.timezone=UTC", "-Dfile.encoding=UTF-8", "-Djava.util.logging.manager=org.apache.logging.log4j.jul.LogManager"]
+  - druid_indexer_fork_property_druid_processing_buffer_sizeBytes=256MiB
+  - druid_storage_type=local
+  - druid_storage_storageDirectory=/opt/shared/segments
+  - druid_indexer_logs_type=file
+  - druid_indexer_logs_directory=/opt/shared/indexing-logs
+  - druid_processing_numThreads=2
+  - druid_processing_numMergeBuffers=2
+  - DRUID_LOG4J=(XML logging configuration)
+
+File: druid/docker-compose.yml
+  - druid_shared:, many druid service blocks (coordinator, broker, historical, middlemanager, router)
+  - image: apache/druid:34.0.0 (multiple services)
+  - lots of volume mounts: - druid_shared:/opt/shared, - historical_var:/opt/druid/var, etc.
+  - superset-related volumes also present in this compose (see superset section below)
+
+File: .helm/Chart.yaml
+  - dependency line: - druid
+
+File: .helm/values.yaml
+  - # DRUID
+  - druid:
+  - repository: apache/druid
+  - user: "druid"
+  - database: "druid"
+
+File: .helm/templates/configmaps.yaml
+  - name: druid-config
+  - app.kubernetes.io/name: druid
+  - DRUID_XMX / DRUID_XMS / DRUID_* keys
+  - druid_extensions_loadList: '["druid-histogram", "druid-datasketches", "druid-lookups-cached-global", "postgresql-metadata-storage"]'
+  - druid_metadata_storage_connector_connectURI: "jdbc:postgresql://druid-postgres:5432/druid"
+  - druid_coordinator_service: "druid-coordinator"
+  - druid_broker_service: "druid-broker"
+  - DRUID_LOG4J (logger XML)
+
+File: .helm/templates/druid.yaml
+  - Many templated Kubernetes resources for druid-postgres, druid-coordinator, druid-broker, druid-historical, druid-middlemanager, druid-router
+  - readiness/wait loops (e.g. until pg_isready -h druid-postgres ...)
+  - image: "apache/druid:34.0.0"
+  - environment variable DRUID_HOST values (druid-coordinator, druid-broker, etc.)
+  - claimName: druid-postgres-pvc, druid-shared-pvc, druid-coordinator-pvc, druid-broker-pvc, druid-historical-pvc, druid-middle-pvc, druid-router-pvc
+
+File: .helm/templates/NOTES.txt
+  - "Druid Services:" and kubectl port-forward examples for druid-router and druid-coordinator
+  - commands: kubectl port-forward svc/druid-router ... and kubectl port-forward svc/druid-coordinator ...
+  - hints to view logs (kubectl logs -f deployment/druid-coordinator)
+
+File: .helm/templates/persistent-volume-claims.yaml
+  - Multiple PVC names for druid components: druid-postgres-pvc, druid-shared-pvc, druid-coordinator-pvc, druid-broker-pvc, druid-historical-pvc, druid-middle-pvc, druid-router-pvc
+
+File: inference_container/druid_utils.py
+  - class DruidIngester
+  - coordinator_url = os.getenv("DRUID_URL", "http://coordinator:8081")
+  - submission endpoint: f"{self.coordinator_url}/druid/indexer/v1/task"
+  - datasource control: f"{self.coordinator_url}/druid/coordinator/v1/datasources/{datasource_name}"
+  - polling: requests.get(f"{self.coordinator_url}/druid/indexer/v1/task/{task_id}/status")
+
+File: differ.py
+  - opens './preprocess_container/druid_utils.py' and './inference_container/druid_utils.py' for comparisons
+
+--- SUPERSET REFERENCES (grouped by file) ---
+
+File: druid/docker-compose.yml
+  - superset_postgres_data:
+  - superset_home:
+  - superset-db: service with POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD (superset credentials)
+  - superset: image: apache/superset:v5.0.0-dev
+  - environment: SUPERSET_CONFIG_PATH=/app/superset_config.py, SUPERSET_SECRET_KEY=superduperset
+  - mounts: - ./superset/superset_config.py:/app/superset_config.py
+  - startup commands: superset db upgrade && superset fab create-admin ... && superset init && superset run -h 0.0.0.0 -p 8088 ...
+
+File: superset/superset_config.py
+  - SQLALCHEMY_DATABASE_URI = 'postgresql://superset:superset@superset-db:5432/superset'
+  - SECRET_KEY = os.environ.get('SUPERSET_SECRET_KEY', 'superduperset')
+
+File: .helm/Chart.yaml
+  - dependency line: - superset
+
+File: .helm/values.yaml
+  - # SUPERSET
+  - superset: repository: apache/superset
+  - adminEmail: "admin@superset.com"
+  - superset.postgres.auth.user: "superset"
+  - superset.postgres.auth.password: "superset"
+  - superset.postgres.auth.database: "superset"
+
+File: .helm/templates/configmaps.yaml
+  - name: <chart>-superset-config
+  - superset_config.py: block including
+      SUPERSET_WEBSERVER_PORT = 8088
+      SECRET_KEY = os.environ.get('SUPERSET_SECRET_KEY', 'superduperset')
+      SQLALCHEMY_DATABASE_URI = 'postgresql://{{ .Values.superset.postgres.auth.user }}:{{ .Values.superset.postgres.auth.password }}@...'
+
+File: .helm/templates/NOTES.txt
+  - kubectl port-forward svc/superset {{ .Values.superset.service.port }}:{{ .Values.superset.service.port }}
+  - Access at: http://127.0.0.1:{{ .Values.superset.service.port }}
+
+File: .helm/templates/persistent-volume-claims.yaml
+  - PVC names: superset-postgres-pvc, superset-home-pvc
+
+File: .helm/templates/superset.yaml
+  - templated k8s resources for superset-postgres service & deployment, superset configmap, superset service & deployment
+  - SQLALCHEMY_DATABASE_URI templated, SECRET_KEY templated
+  - readiness/wait loop: until pg_isready -h superset-postgres -p 5432 -U {{ .Values.superset.postgres.auth.user }}; do
+  - startup commands in container: superset db upgrade && superset fab create-admin ... && superset init && superset run -h 0.0.0.0 -p 8088 ...
+
+File: superset/superset_config.py (again)
+  - SQLALCHEMY_DATABASE_URI = 'postgresql://superset:superset@superset-db:5432/superset'
+  - SECRET_KEY = os.environ.get('SUPERSET_SECRET_KEY', 'superduperset')
+
+--- NOTES / NEXT STEPS ---
+- This file is a consolidated, human-readable report of the druid & superset references (key lines and file locations).
+- If you want the absolute raw grep output (including every duplicated occurrence and exact line numbers), I can produce and save that as well.
+- If you'd like me to automatically comment out or remove these references (non-destructively), confirm whether you prefer: (A) comment-out service blocks in top-level `docker-compose.yaml` and the `druid/` and `superset/` compose entries, or (B) delete directories/files (`druid/`, `superset/`, `.helm` druid/superset templates). I'll create a backup branch before making changes.
+
+File created at: search_results/druid_superset_matches.txt

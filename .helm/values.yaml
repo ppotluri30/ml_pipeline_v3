@@ -200,88 +200,8 @@ mlflow:
     storage:
       size: "5Gi"
 
-# DRUID
-druid:
-  enabled: true
-  image:
-    repository: apache/druid
-    tag: "34.0.0"
-  postgres:
-    image:
-      repository: postgres
-      tag: "latest"
-    auth:
-      user: "druid"
-      password: "FoolishPassword"
-      database: "druid"
-    resources:
-      requests:
-        memory: "512Mi"
-        cpu: "250m"
-      limits: 
-        memory: "1Gi"
-        cpu: "500m"
-    storage:
-      size: "5Gi"
-  zookeeper:
-    image:
-      repository: zookeeper
-      tag: "3.5.10"
-  services:
-    coordinator:
-      port: 8081
-    broker:
-      port: 8082
-    historical:
-      enabled: false
-      port: 8083
-    middlemanager:
-      port: 8091
-      peonPorts: "8100-8105"
-    router:
-      port: 8888
-  storage:
-    shared: "20Gi"
-    coordinator: "2Gi"
-    broker: "2Gi"
-    historical: "10Gi"
-    middlemanager: "5Gi"
-    router: "1Gi"
 
-# SUPERSET
-superset:
-  enabled: true
-  image:
-    repository: apache/superset
-    tag: "v5.0.0-dev"
-  service:
-    port: 8088
-  auth:
-    secretKey: "superduperset"
-    adminUsername: "admin"
-    adminPassword: "admin"
-    adminEmail: "admin@superset.com"
-  postgres:
-    image:
-      repository: postgres
-      tag: "13"
-    service:
-      port: 5432
-    auth:
-      user: "superset"
-      password: "superset"
-      database: "superset"
-    resources:
-      requests:
-        memory: "512Mi"
-        cpu: "250m"
-      limits: 
-        memory: "1Gi"
-        cpu: "500m"
-    storage:
-      size: "2Gi"
-  storage:
-    size: "2Gi"
+
 
 # ---------- Pipeline ----------
 
