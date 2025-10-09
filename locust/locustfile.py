@@ -35,6 +35,11 @@ LOG_FILE = os.getenv("LOG_FILE", "/mnt/locust/locust_requests.jsonl")
 TRUNCATE_ON_START = os.getenv("LOCUST_TRUNCATE_LOG", "0") == "1"
 DOWNLOAD_WARMUP_ATTEMPTS = int(os.getenv("DOWNLOAD_WARMUP_ATTEMPTS", "5"))
 DOWNLOAD_WARMUP_DELAY_SEC = float(os.getenv("DOWNLOAD_WARMUP_DELAY", "0.5"))
+# Enhanced predict logging controls
+LOG_PREDICT_ALL = os.getenv("LOG_PREDICT_ALL", "0") == "1"  # log every predict (success + failure)
+LOG_PREDICT_ERRORS = os.getenv("LOG_PREDICT_ERRORS", "1") == "1"  # log failed predict even if not logging all
+LOG_PREDICT_RESPONSE_CHARS = int(os.getenv("LOG_PREDICT_RESPONSE_CHARS", "0"))  # capture first N chars of body
+LOG_PREDICT_PAYLOAD = os.getenv("LOG_PREDICT_PAYLOAD", "0") == "1"  # echo JSON payload (small tests only)
 _predict_ready = True  # warmup removed; assume service pre-warmed
 _download_ready = False
 _download_warm_attempts = 0
@@ -99,18 +104,60 @@ def log_request(request_type, name, response_time, response_length, response, co
     try:
         status_code = getattr(response, "status_code", None) if response else None
         if name == "predict":
-            if not _predict_ready:
+            # If predict not ready, optionally record as skipped
+            if not _predict_ready and LOG_PREDICT_ALL:
+                _append_jsonl({
+                    "ts": time.time(),
+                    "request_type": request_type,
+                    "name": name,
+                    "skipped": True,
+                    "reason": "predict_not_ready"
+                })
                 return
-            if status_code != 200:
+            log_this = False
+            if LOG_PREDICT_ALL:
+                log_this = True
+            elif status_code and status_code == 200:
+                log_this = True
+            elif LOG_PREDICT_ERRORS and (exception or (status_code and status_code >= 400)):
+                log_this = True
+            if not log_this:
                 return
-        _append_jsonl({
-            "ts": time.time(),
-            "request_type": request_type,
-            "name": name,
-            "response_time_ms": response_time,
-            "status_code": status_code,
-            "error": str(exception) if exception else None,
-        })
+            body_snip = None
+            if LOG_PREDICT_RESPONSE_CHARS > 0 and response is not None:
+                try:
+                    txt = response.text
+                    if len(txt) > LOG_PREDICT_RESPONSE_CHARS:
+                        body_snip = txt[:LOG_PREDICT_RESPONSE_CHARS] + "..."  # truncated
+                    else:
+                        body_snip = txt
+                except Exception:
+                    body_snip = None
+            payload = None
+            if LOG_PREDICT_PAYLOAD and context and isinstance(context, dict):
+                payload = context.get("request_json")
+            rec = {
+                "ts": time.time(),
+                "request_type": request_type,
+                "name": name,
+                "response_time_ms": response_time,
+                "status_code": status_code,
+                "error": str(exception) if exception else None,
+            }
+            if body_snip is not None:
+                rec["response_snip"] = body_snip
+            if payload is not None:
+                rec["payload"] = payload
+            _append_jsonl(rec)
+        else:
+            _append_jsonl({
+                "ts": time.time(),
+                "request_type": request_type,
+                "name": name,
+                "response_time_ms": response_time,
+                "status_code": status_code,
+                "error": str(exception) if exception else None,
+            })
     except Exception as e:  # pragma: no cover
         print(f"[locustfile] log_request hook failed: {e}")
 
@@ -203,7 +250,25 @@ class PipelineUser(HttpUser):
     def predict(self):
         if not _predict_ready:
             return
-        self.client.post(PREDICT_URL, json={"inference_length": 1}, name="predict")
+        # Provide context payload for optional logging (Locust doesn't pass it automatically; we attach via context manager pattern)
+        payload = {"inference_length": 1}
+        # Use request name 'predict'. Locust doesn't expose direct context injection; emulate by storing on the response object via hook.
+        # We'll wrap the post to stash JSON so log_request can pick it up if enabled.
+        try:
+            r = self.client.post(PREDICT_URL, json=payload, name="predict")
+            # Attach lightweight context by monkey-patching a property bag.
+            if LOG_PREDICT_PAYLOAD:
+                if not hasattr(r, "context"):
+                    try:
+                        r.context = {}
+                    except Exception:
+                        pass
+                try:
+                    r.context["request_json"] = payload
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     @task(10)
     def health(self):
