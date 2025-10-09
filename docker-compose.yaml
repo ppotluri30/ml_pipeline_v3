@@ -54,17 +54,23 @@ services:
     networks:
       - app-network
 
-  # Init container to create buckets
+
   minio-init:
-    image: minio/mc:latest
+    image: minio/mc
+    container_name: ml_pipeline_v3-minio-init
     depends_on:
       - minio
-    entrypoint: ["/bin/sh","/init.sh"]
-    volumes:
-      - ./minio-init.sh:/init.sh:ro
+    entrypoint: ["sh", "-c", "/scripts/minio-init.sh"]
+    environment:
+      - MC_ENDPOINT=http://minio:9000
+      - MC_USER=minioadmin
+      - MC_PASS=minioadmin
     networks:
       - app-network
-    restart: "no"
+    volumes:
+      - ./scripts/minio-init.sh:/scripts/minio-init.sh
+
+
 
   postgres:
     image: postgres:13
@@ -319,7 +325,7 @@ services:
   inference:
     build: ./inference_container
     ports:
-      - "8023:8000"
+      - "8000"
     depends_on:
       kafka:
         condition: service_healthy
@@ -351,7 +357,7 @@ services:
       - WAIT_FOR_MODEL=1
       - MODEL_WAIT_TIMEOUT=5
       - INFERENCE_PREWARM=1
-      - QUEUE_WORKERS=2
+      - QUEUE_WORKERS=4
       - QUEUE_MAXSIZE=40
       - INFERENCE_TIMEOUT=15
     networks:
