@@ -32,4 +32,5 @@ COPY . .
 EXPOSE 8000
 
 # This command is passed to the entrypoint script.
-CMD ["uvicorn", "main:app", "--host=0.0.0.0", "--port=8000"]
+# Note: --graceful-timeout is not a valid uvicorn option; use only supported flags.
+CMD ["uvicorn", "main:app", "--host=0.0.0.0", "--port=8000", "--timeout-keep-alive", "60"]

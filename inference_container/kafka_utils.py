@@ -48,6 +48,27 @@ def create_consumer(topic, group_id):
     )
     return consumer
 
+def create_consumer_configurable(topic, group_id, enable_auto_commit=False, auto_offset_reset='earliest'):
+    """Create a KafkaConsumer with configurable auto-commit behavior.
+
+    Note: Poll batching parameters are provided to consumer.poll(...), not here.
+    """
+    bootstrap_servers = os.environ.get('KAFKA_BOOTSTRAP_SERVERS')
+    if not bootstrap_servers:
+        raise ValueError("KAFKA_BOOTSTRAP_SERVERS environment variable not set.")
+
+    # honor manual commit setting
+    consumer = KafkaConsumer(
+        topic,
+        bootstrap_servers=bootstrap_servers,
+        group_id=group_id,
+        value_deserializer=lambda v: json.loads(v.decode('utf-8')),
+        key_deserializer=lambda k: k.decode('utf-8') if k else None,
+        auto_offset_reset=auto_offset_reset,
+        enable_auto_commit=enable_auto_commit,
+    )
+    return consumer
+
 def produce_message(producer, topic, value, key=None):
     """
     Sends a dictionary as a JSON message to a Kafka topic.
@@ -88,6 +109,26 @@ def consume_messages(consumer, callback):
     finally:
         print("Closing Kafka consumer.")
         consumer.close()
+
+def jlog(event: str, **extra):
+    try:
+        base = {"service": "kafka_utils", "event": event}
+        base.update({k: v for k, v in extra.items() if v is not None})
+        print(json.dumps(base))
+    except Exception:
+        pass
+
+def commit_offsets_sync(consumer, offsets_by_tp):
+    """Helper to commit offsets synchronously.
+
+    offsets_by_tp should be a dict of {TopicPartition: OffsetAndMetadata}.
+    """
+    try:
+        consumer.commit(offsets=offsets_by_tp)
+        jlog("commit_offsets", tps=[f"{tp.topic}:{tp.partition}" for tp in offsets_by_tp.keys()],
+             offsets=[o.offset for o in offsets_by_tp.values()])
+    except Exception as e:
+        jlog("commit_offsets_fail", error=str(e))
 
 def publish_error(producer, dlq_topic, operation, status, error_details, payload):
     """

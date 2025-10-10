@@ -1,0 +1,54 @@
+services:
+  # Staging overrides for inference and load testing.
+  # The values below match the validated zero-failure setup observed in headless runs.
+  inference:
+    environment:
+      # Inference runtime controls (validated zero-failure config)
+      USE_BOUNDED_QUEUE: "true"
+      USE_MANUAL_COMMIT: "true"
+      ENABLE_MICROBATCH: "true"
+      ENABLE_TTL: "true"
+      ENABLE_PUBLISH_API: "true"
+      UVICORN_KEEPALIVE: 30
+      UVICORN_TIMEOUT_KEEP_ALIVE: 60
+      UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN: 30
+      QUEUE_MAXSIZE: 40
+      PAUSE_THRESHOLD_PCT: 80
+      RESUME_THRESHOLD_PCT: 50
+      # Optional Kafka consumer tunables (kept for completeness; not critical to HTTP load path)
+      FETCH_MAX_WAIT_MS: 50
+      MAX_POLL_RECORDS: 64
+      # Optional micro-batch sizing (leave defaults if not needed for your scenario)
+      # BATCH_SIZE: 32
+      # BATCH_TIMEOUT_MS: 25
+
+  # Locust overrides for quick testing (do not redefine the service)
+  locust:
+    environment:
+      LOCUST_MODE: "ui"
+      USERS: "200"
+      SPAWN_RATE: "20"
+      RUNTIME: "120s"
+      PREDICT_WARMUP_DISABLE: "1"
+      KAFKA_BURST: "1"
+      KAFKA_BURST_COUNT: "1"
+
+  # Ensure worker inherits or overrides as needed (no redefinition)
+  locust-worker:
+    environment:
+      LOCUST_MODE: "worker"
+      PREDICT_WARMUP_DISABLE: "1"
+      KAFKA_BURST: "1"
+      KAFKA_BURST_COUNT: "1"
+
+  # Lightweight resource usage visibility for inference during load tests.
+  metrics:
+    image: alpine:3.20
+    command: >-
+      sh -c 'apk add --no-cache docker-cli >/dev/null 2>&1; while true; do date; docker stats $(docker ps --format "{{.Names}}" | grep -m1 inference) --no-stream; sleep 5; done'
+    depends_on:
+      - inference
+    networks:
+      - app-network
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro

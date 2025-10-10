@@ -38,8 +38,9 @@ services:
       minio-init:
         condition: service_completed_successfully
     networks:
-      - app-network
-
+      app-network:
+        aliases:
+          - fastapi-app
   minio:
     image: minio/minio:latest
     container_name: minio
@@ -53,8 +54,6 @@ services:
     command: server /data --console-address ":9001"
     networks:
       - app-network
-
-  # Init container to create buckets
   minio-init:
     image: minio/mc:latest
     depends_on:
@@ -294,7 +293,22 @@ services:
       - GATEWAY_BASE=http://fastapi-app:8000
       - ENDPOINT_DOWNLOAD=http://fastapi-app:8000/download/processed-data/test_processed_data.parquet
       - ENDPOINT_DOWNLOAD_ALT=http://fastapi-app:8000/download/processed-data/processed_data.parquet
-    command: ["-f", "/mnt/locust/locustfile.py", "--host", "http://inference:8000"]
+      - PREDICT_URL=http://inference:8000/predict
+      - PREDICT_WARMUP_DISABLE=0
+      - KAFKA_BURST=0
+      - KAFKA_BURST_COUNT=5000
+      - KAFKA_BURST_TTL_MS=
+      - KAFKA_BURST_KEY_PREFIX=
+      - LOCUST_MODE=ui
+    command:
+      - -f
+      - /mnt/locust/locustfile.py
+      - --host
+      - http://inference:8000
+      - --web-host
+      - 0.0.0.0
+      - --web-port
+      - "8089"
     ports:
       - "8089:8089"
       - "5557:5557"
@@ -309,7 +323,17 @@ services:
         condition: service_started
     working_dir: /mnt/locust
     environment:
-      - LOCUST_HOST=http://fastapi-app:8000
+      # Mirror master env so worker tasks use the same endpoints/behavior
+      - LOCUST_TRUNCATE_LOG=1
+      - GATEWAY_BASE=http://fastapi-app:8000
+      - ENDPOINT_DOWNLOAD=http://fastapi-app:8000/download/processed-data/test_processed_data.parquet
+      - ENDPOINT_DOWNLOAD_ALT=http://fastapi-app:8000/download/processed-data/processed_data.parquet
+      - PREDICT_URL=http://inference:8000/predict
+      - PREDICT_WARMUP_DISABLE=0
+      - KAFKA_BURST=0
+      - KAFKA_BURST_COUNT=5000
+      - KAFKA_BURST_TTL_MS=
+      - KAFKA_BURST_KEY_PREFIX=
     volumes:
       - ./locust:/mnt/locust
     command: ["-f", "/mnt/locust/locustfile.py", "--worker", "--master-host", "locust"]
@@ -354,6 +378,20 @@ services:
       - QUEUE_WORKERS=2
       - QUEUE_MAXSIZE=40
       - INFERENCE_TIMEOUT=15
+      # Kafka backpressure and commit controls (bounded queue inside runtime)
+      - USE_BOUNDED_QUEUE=1
+      - USE_MANUAL_COMMIT=1
+      - FETCH_MAX_WAIT_MS=50
+      - MAX_POLL_RECORDS=64
+      - PAUSE_THRESHOLD_PCT=80
+      - RESUME_THRESHOLD_PCT=50
+      - ENABLE_MICROBATCH=1
+      - BATCH_SIZE=32
+      - BATCH_TIMEOUT_MS=25
+      - ENABLE_TTL=1
+      # Test-only: expose publish API and tweak keep-alive for connection stability under load
+      - ENABLE_PUBLISH_API=1
+      - UVICORN_KEEPALIVE=30
     networks:
       - common
       - app-network

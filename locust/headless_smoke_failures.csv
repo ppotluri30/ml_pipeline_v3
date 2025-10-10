@@ -1,0 +1,4 @@
+Method,Name,Error,Occurrences
+GET,healthz-warm,"ConnectionRefusedError(111, 'Connection refused')",50
+POST,predict,HTTPError('429 Client Error: Too Many Requests for url: predict'),2
+POST,predict,"ConnectionRefusedError(111, 'Connection refused')",1

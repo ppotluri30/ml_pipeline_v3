@@ -1,0 +1,3 @@
+Method,Name,Error,Occurrences
+POST,predict_warmup,HTTPError('429 Client Error: Too Many Requests for url: predict_warmup'),49
+POST,predict_warmup,HTTPError('500 Server Error: Internal Server Error for url: predict_warmup'),250

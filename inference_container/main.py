@@ -1,6 +1,14 @@
 # predict_container/main.py
 from client_utils import get_file, post_file
-from kafka_utils import create_producer, create_consumer, produce_message, consume_messages, publish_error
+from kafka_utils import (
+    create_producer,
+    create_consumer,
+    create_consumer_configurable,
+    produce_message,
+    consume_messages,
+    publish_error,
+    commit_offsets_sync,
+)
 from inferencer import Inferencer
 import os
 import pickle
@@ -161,10 +169,20 @@ def _ensure_buckets():
     except Exception as e:  # noqa: BLE001
         print(f"Bucket ensure error (inference): {e}")
 
-_ensure_buckets()
+if os.environ.get("DISABLE_BUCKET_ENSURE", "0").lower() not in {"1","true","yes"}:
+    _ensure_buckets()
 
 # --- Kafka Message Queue ---
-message_queue = queue.Queue() # A single queue to hold messages from both consumers
+# --- Queue configuration (bounded by env when enabled) ---
+USE_BOUNDED_QUEUE = os.environ.get("USE_BOUNDED_QUEUE", "false").lower() in {"1", "true", "yes"}
+QUEUE_MAXSIZE = int(os.environ.get("QUEUE_MAXSIZE", "512"))
+message_queue = queue.Queue(maxsize=QUEUE_MAXSIZE) if USE_BOUNDED_QUEUE else queue.Queue()
+# Per-source commit queues: filled by worker after successful processing
+commit_queues = {
+    "training": queue.Queue(),
+    "preprocessing": queue.Queue(),
+    "promotion": queue.Queue(),
+}
 
 # --- Kafka Producer for Inference Output and DLQ ---
 producer = create_producer()
@@ -174,8 +192,42 @@ dlq_topic = f"DLQ-{PRODUCER_TOPIC}"
 def _kafka_callback_factory(service_instance: Inferencer, source_name: str, message_queue_ref: queue.Queue):
     """Creates a callback function for Kafka consumers to put messages into the shared queue."""
     def callback(message):
-        print(f"\nConsumer received {source_name} message with key: {message.key} and added to queue.")
-        message_queue_ref.put({"source": source_name, "message": message})
+        # Enqueue or block depending on bounded queue setting
+        if USE_BOUNDED_QUEUE and message_queue_ref.full():
+            # Drop into controlled backpressure handled by pause/resume; still try to enqueue without blocking
+            try:
+                message_queue_ref.put({
+                    "source": source_name,
+                    "message": message,
+                    "tp": getattr(message, 'topic', None),
+                    "partition": getattr(message, 'partition', None),
+                    "offset": getattr(message, 'offset', None),
+                }, block=False)
+            except queue.Full:
+                # As a last resort, block briefly to avoid tight spin
+                message_queue_ref.put({
+                    "source": source_name,
+                    "message": message,
+                    "tp": getattr(message, 'topic', None),
+                    "partition": getattr(message, 'partition', None),
+                    "offset": getattr(message, 'offset', None),
+                }, timeout=0.5)
+        else:
+            message_queue_ref.put({
+                "source": source_name,
+                "message": message,
+                "tp": getattr(message, 'topic', None),
+                "partition": getattr(message, 'partition', None),
+                "offset": getattr(message, 'offset', None),
+            })
+        print({
+            "service": "inference",
+            "event": "queue_enqueued",
+            "source": source_name,
+            "depth": message_queue_ref.qsize(),
+            "bounded": int(USE_BOUNDED_QUEUE),
+            "maxsize": QUEUE_MAXSIZE if USE_BOUNDED_QUEUE else -1
+        })
     return callback
 
 # --- Worker Thread Function ---
@@ -185,102 +237,147 @@ def message_handler(service: Inferencer, message_queue: queue.Queue):
     It dispatches tasks based on the message source (training or preprocessing).
     """
     print("Inference worker thread started. Waiting for messages in queue...")
+    ENABLE_TTL = os.environ.get("ENABLE_TTL", "false").lower() in {"1","true","yes"}
+    ENABLE_MICROBATCH = os.environ.get("ENABLE_MICROBATCH", "false").lower() in {"1","true","yes"}
+    BATCH_SIZE = int(os.environ.get("BATCH_SIZE", "32"))
+    BATCH_TIMEOUT_MS = int(os.environ.get("BATCH_TIMEOUT_MS", "25"))
     while True:
         try:
-            queue_item = message_queue.get()
-            source = queue_item.get("source")
-            message = queue_item.get("message")
-
-            print(f"Inference worker received message from {source} queue with key: {message.key}")
-
-            if source == "training":
-                claim_check = message.value
-                operation = claim_check.get("operation")
-                status = claim_check.get("status")
-                experiment = claim_check.get("experiment")
-                run_name = claim_check.get("run_name")
-
-                run_inference_on_train = os.environ.get("RUN_INFERENCE_ON_TRAIN_SUCCESS", "1").lower() in {"1","true","yes"}
-                allowed = {m.strip().upper() for m in os.environ.get("ALLOWED_INFERENCE_MODELS", "").split(',') if m.strip()}
-                if operation and (status == "SUCCESS") and experiment and run_name:
-                    print(f"Inference worker attempting to load new model for experiment '{experiment}', run '{run_name}'.")
-                    # Capture config hash for enriched logging downstream
+            if ENABLE_MICROBATCH:
+                # Drain up to BATCH_SIZE or until timeout
+                batch = []
+                first = message_queue.get()
+                batch.append(first)
+                start_t = time.time()
+                while len(batch) < BATCH_SIZE:
+                    timeout_sec = max(0.0, BATCH_TIMEOUT_MS/1000.0 - (time.time() - start_t))
+                    if timeout_sec <= 0:
+                        break
                     try:
-                        service.current_config_hash = claim_check.get("config_hash")
+                        item = message_queue.get(timeout=timeout_sec)
+                        batch.append(item)
+                    except queue.Empty:
+                        break
+                items = batch
+            else:
+                items = [message_queue.get()]
+            # Track highest processed offsets per source/topic-partition
+            processed_offsets = {"training": {}, "preprocessing": {}, "promotion": {}}
+            for queue_item in items:
+                source = queue_item.get("source")
+                message = queue_item.get("message")
+                tp_name = queue_item.get("tp")
+                partition = queue_item.get("partition")
+                offset = queue_item.get("offset")
+
+                print(f"Inference worker received message from {source} queue with key: {message.key}")
+
+                # TTL handling via Kafka headers
+                if ENABLE_TTL:
+                    try:
+                        headers_list = message.headers or []  # type: ignore[attr-defined]
+                        headers = { (k.decode() if isinstance(k, (bytes, bytearray)) else k): v for k, v in headers_list }
+                        if 'deadline_ms' in headers:
+                            try:
+                                raw_val = headers['deadline_ms']
+                                deadline_ms = int(raw_val.decode()) if isinstance(raw_val, (bytes, bytearray)) else int(raw_val)
+                                if int(time.time() * 1000) > deadline_ms:
+                                    print({"service": "inference", "event": "ttl_expired", "source": source, "key": message.key})
+                                    # Skip processing; finalizer will mark task_done and commit loop will proceed
+                                    continue
+                            except Exception as _:
+                                pass
                     except Exception:
-                        service.current_config_hash = None
-                    service.load_model(experiment, run_name)
-                    # Only run inference if gating allows and model type is allowed (if list provided)
-                    if run_inference_on_train:
-                        model_type_upper = (service.model_type or service.current_run_name or "").upper()
-                        if (not allowed) or (model_type_upper in allowed):
-                            if service.df is not None:
-                                service.perform_inference(service.df)
-                        else:
-                            print({
-                                "service": "inference",
-                                "event": "skip_model_type_not_allowed",
-                                "model_type": model_type_upper,
-                                "allowed": list(allowed)
-                            })
-                else:
-                    print(f"Inference worker WARN: Training message received without complete details or success status: {claim_check}")
-                    publish_error(
-                        service.producer,
-                        service.dlq_topic,
-                        "Training Message Parse",
-                        "Failure",
-                        "Incomplete training claim check",
-                        claim_check
-                    )
-            elif source == "preprocessing":
-                claim_check = message.value
-                # Support both legacy and new claim shapes
-                bucket = claim_check.get("bucket")
-                object_key = claim_check.get("object_key") or claim_check.get("object")
-                operation = claim_check.get("operation")  # Optional
+                        pass
 
-                if bucket and object_key:
-                    print(f"Inference worker fetching data from object store: s3://{bucket}/{object_key}")
-                    try:
-                        parquet_bytes = get_file(service.gateway_url, bucket, object_key)
-                        table = pq.read_table(source=parquet_bytes)
-                        service.df = table.to_pandas()
+                if source == "training":
+                    claim_check = message.value
+                    operation = claim_check.get("operation")
+                    status = claim_check.get("status")
+                    experiment = claim_check.get("experiment")
+                    run_name = claim_check.get("run_name")
 
-                        if service.current_model is not None:
-                            service.perform_inference(service.df)
-                        else:
-                            print("Model not yet loaded; stored dataframe for later inference.")
-                    except Exception as e:
-                        print(f"Inference worker error fetching, parsing, or during inference for {object_key}: {e}")
-                        traceback.print_exc()
+                    run_inference_on_train = os.environ.get("RUN_INFERENCE_ON_TRAIN_SUCCESS", "1").lower() in {"1","true","yes"}
+                    allowed = {m.strip().upper() for m in os.environ.get("ALLOWED_INFERENCE_MODELS", "").split(',') if m.strip()}
+                    if operation and (status == "SUCCESS") and experiment and run_name:
+                        print(f"Inference worker attempting to load new model for experiment '{experiment}', run '{run_name}'.")
+                        # Capture config hash for enriched logging downstream
+                        try:
+                            service.current_config_hash = claim_check.get("config_hash")
+                        except Exception:
+                            service.current_config_hash = None
+                        service.load_model(experiment, run_name)
+                        # Only run inference if gating allows and model type is allowed (if list provided)
+                        if run_inference_on_train:
+                            model_type_upper = (service.model_type or service.current_run_name or "").upper()
+                            if (not allowed) or (model_type_upper in allowed):
+                                if service.df is not None:
+                                    service.perform_inference(service.df)
+                            else:
+                                print({
+                                    "service": "inference",
+                                    "event": "skip_model_type_not_allowed",
+                                    "model_type": model_type_upper,
+                                    "allowed": list(allowed)
+                                })
+                    else:
+                        print(f"Inference worker WARN: Training message received without complete details or success status: {claim_check}")
                         publish_error(
                             service.producer,
                             service.dlq_topic,
-                            "Data Fetch/Inference",
+                            "Training Message Parse",
                             "Failure",
-                            str(e),
-                            {"bucket": bucket, "object_key": object_key}
+                            "Incomplete training claim check",
+                            claim_check
                         )
-                else:
-                    print(f"Inference worker WARN: Preprocessing message missing bucket/object fields: {claim_check}")
-                    publish_error(
-                        service.producer,
-                        service.dlq_topic,
-                        "Preprocessing Message Parse",
-                        "Failure",
-                        "Incomplete preprocessing claim check",
-                        claim_check
-                    )
-            elif source == "promotion":
-                claim_check = message.value
-                run_id = claim_check.get("run_id")
-                model_uri = claim_check.get("model_uri")
-                model_type = claim_check.get("model_type")
-                print(f"Promotion message received for run_id={run_id}, model_type={model_type}")
-                try:
-                    if model_uri and run_id:
-                        from mlflow import pyfunc
+                elif source == "preprocessing":
+                    claim_check = message.value
+                    # Support both legacy and new claim shapes
+                    bucket = claim_check.get("bucket")
+                    object_key = claim_check.get("object_key") or claim_check.get("object")
+                    operation = claim_check.get("operation")  # Optional
+
+                    if bucket and object_key:
+                        print(f"Inference worker fetching data from object store: s3://{bucket}/{object_key}")
+                        try:
+                            parquet_bytes = get_file(service.gateway_url, bucket, object_key)
+                            table = pq.read_table(source=parquet_bytes)
+                            service.df = table.to_pandas()
+
+                            if service.current_model is not None:
+                                service.perform_inference(service.df)
+                            else:
+                                print("Model not yet loaded; stored dataframe for later inference.")
+                        except Exception as e:
+                            print(f"Inference worker error fetching, parsing, or during inference for {object_key}: {e}")
+                            traceback.print_exc()
+                            publish_error(
+                                service.producer,
+                                service.dlq_topic,
+                                "Data Fetch/Inference",
+                                "Failure",
+                                str(e),
+                                {"bucket": bucket, "object_key": object_key}
+                            )
+                    else:
+                        print(f"Inference worker WARN: Preprocessing message missing bucket/object fields: {claim_check}")
+                        publish_error(
+                            service.producer,
+                            service.dlq_topic,
+                            "Preprocessing Message Parse",
+                            "Failure",
+                            "Incomplete preprocessing claim check",
+                            claim_check
+                        )
+                elif source == "promotion":
+                    claim_check = message.value
+                    run_id = claim_check.get("run_id")
+                    model_uri = claim_check.get("model_uri")
+                    model_type = claim_check.get("model_type")
+                    print(f"Promotion message received for run_id={run_id}, model_type={model_type}")
+                    try:
+                        if model_uri and run_id:
+                            from mlflow import pyfunc
                         attempted = []
                         # Try original URI then fallback 'model' subpath if not already that
                         uri_candidates = [model_uri]
@@ -323,21 +420,31 @@ def message_handler(service: Inferencer, message_queue: queue.Queue):
                             _enrich_loaded_model(service, run_id, service.model_type or model_type)
                         if service.current_model is not None and service.df is not None:
                             service.perform_inference(service.df)
-                    else:
-                        print("Promotion message missing run_id/model_uri; sending to DLQ")
-                        publish_error(service.producer, service.dlq_topic, "Promotion Message Parse", "Failure", "Incomplete promotion message", claim_check)
-                except Exception as e:
-                    publish_error(service.producer, service.dlq_topic, "Promotion Load", "Failure", str(e), claim_check)
-            else:
-                print(f"Inference worker WARN: Unknown message source: {source}. Message: {message.value}")
-                publish_error(
-                    service.producer,
-                    service.dlq_topic,
-                    "Unknown Message Source",
-                    "Failure",
-                    f"Message from unknown source '{source}'",
-                    message.value
-                )
+                        else:
+                            print("Promotion message missing run_id/model_uri; sending to DLQ")
+                            publish_error(service.producer, service.dlq_topic, "Promotion Message Parse", "Failure", "Incomplete promotion message", claim_check)
+                    except Exception as e:
+                        publish_error(service.producer, service.dlq_topic, "Promotion Load", "Failure", str(e), claim_check)
+                else:
+                    print(f"Inference worker WARN: Unknown message source: {source}. Message: {message.value}")
+                    publish_error(
+                        service.producer,
+                        service.dlq_topic,
+                        "Unknown Message Source",
+                        "Failure",
+                        f"Message from unknown source '{source}'",
+                        message.value
+                    )
+
+                # record processed offset
+                try:
+                    if tp_name is not None and partition is not None and offset is not None:
+                        key = (str(tp_name), int(partition))
+                        current = processed_offsets[source].get(key, -1)
+                        if int(offset) > current:
+                            processed_offsets[source][key] = int(offset)
+                except Exception:
+                    pass
 
         except Exception as e:
             print(f"Inference worker failed to process message from queue: {e}")
@@ -351,7 +458,22 @@ def message_handler(service: Inferencer, message_queue: queue.Queue):
                 "No specific payload (queue error)"
             )
         finally:
-            message_queue.task_done()
+            # Mark all drained items as done
+            try:
+                if ENABLE_MICROBATCH:
+                    for _ in items:
+                        message_queue.task_done()
+                else:
+                    message_queue.task_done()
+            except Exception:
+                pass
+            # After marking tasks done, publish processed offsets for commit
+            try:
+                for src, tpmap in processed_offsets.items():
+                    if tpmap:
+                        commit_queues[src].put(tpmap)
+            except Exception:
+                pass
 
 
 inferencer = Inferencer(GATEWAY_URL, producer, dlq_topic, PRODUCER_TOPIC)
@@ -556,23 +678,105 @@ def _start_runtime():
     )
     worker_thread.start()
 
-    # Create and start consumers in their own threads (training, preprocessing, promotion)
-    training_consumer = create_consumer(TRAINING_TOPIC, CONSUMER_GROUP_ID)
-    training_callback_func = _kafka_callback_factory(inferencer, "training", message_queue)
-    training_consumer_thread = threading.Thread(target=consume_messages, args=(training_consumer, training_callback_func), daemon=True)
-    training_consumer_thread.start()
+    # Consumer configuration flags
+    USE_MANUAL_COMMIT = os.environ.get("USE_MANUAL_COMMIT", "false").lower() in {"1","true","yes"}
+    FETCH_MAX_WAIT_MS = int(os.environ.get("FETCH_MAX_WAIT_MS", "50"))
+    MAX_POLL_RECORDS = int(os.environ.get("MAX_POLL_RECORDS", "64"))
+
+    # Backpressure thresholds (percent of QUEUE_MAXSIZE)
+    PAUSE_THRESHOLD_PCT = float(os.environ.get("PAUSE_THRESHOLD_PCT", "80"))
+    RESUME_THRESHOLD_PCT = float(os.environ.get("RESUME_THRESHOLD_PCT", "50"))
+
+    def _consumer_loop(topic_name: str, source_name: str):
+        consumer = create_consumer_configurable(topic_name, CONSUMER_GROUP_ID, enable_auto_commit=not USE_MANUAL_COMMIT)
+        assigned = None
+        try:
+            print({"service": "inference", "event": "consumer_loop_start", "topic": topic_name, "manual_commit": int(USE_MANUAL_COMMIT)})
+            while True:
+                # Pause/resume by queue depth (only if bounded)
+                if USE_BOUNDED_QUEUE:
+                    depth = message_queue.qsize()
+                    cap = QUEUE_MAXSIZE if USE_BOUNDED_QUEUE else 0
+                    if cap:
+                        pct = 100.0 * depth / cap
+                        if pct >= PAUSE_THRESHOLD_PCT:
+                            assigned = assigned or consumer.assignment()
+                            if assigned:
+                                consumer.pause(*assigned)
+                                print({"service": "inference", "event": "consumer_paused", "topic": topic_name, "depth": depth, "pct": round(pct,2)})
+                        elif pct <= RESUME_THRESHOLD_PCT:
+                            assigned = assigned or consumer.assignment()
+                            if assigned:
+                                consumer.resume(*assigned)
+                                print({"service": "inference", "event": "consumer_resumed", "topic": topic_name, "depth": depth, "pct": round(pct,2)})
+
+                # Poll a batch
+                records = consumer.poll(timeout_ms=FETCH_MAX_WAIT_MS, max_records=MAX_POLL_RECORDS)
+                if not records:
+                    # Even if no new records, apply any pending commits after processing
+                    if USE_MANUAL_COMMIT:
+                        try:
+                            from kafka.structs import TopicPartition, OffsetAndMetadata  # type: ignore
+                            drained = 0
+                            while True:
+                                tpmap = commit_queues[source_name].get_nowait()
+                                commit_map = {}
+                                for (tp_topic, tp_part), last_offset in tpmap.items():
+                                    tp = TopicPartition(tp_topic, tp_part)
+                                    # Include leader_epoch (-1) for compatibility with kafka-python versions that
+                                    # require an integer leader_epoch; -1 means "no epoch".
+                                    commit_map[tp] = OffsetAndMetadata(last_offset + 1, None, -1)
+                                commit_offsets_sync(consumer, commit_map)
+                                commit_queues[source_name].task_done()
+                                drained += 1
+                            if drained:
+                                print({"service": "inference", "event": "commits_applied", "drained_batches": drained, "source": source_name})
+                        except queue.Empty:
+                            pass
+                    continue
+                # Track highest offsets per TP for commit (we commit after processing via commit_queues)
+                for tp, messages in records.items():
+                    for msg in messages:
+                        cb = _kafka_callback_factory(inferencer, source_name, message_queue)
+                        try:
+                            cb(msg)
+                        except Exception as e:
+                            print({"service": "inference", "event": "enqueue_fail", "error": str(e)})
+
+                # Drain processed offsets and commit next offsets (at-least-once after processing)
+                if USE_MANUAL_COMMIT:
+                    try:
+                        drained = 0
+                        from kafka.structs import TopicPartition, OffsetAndMetadata  # type: ignore
+                        while True:
+                            tpmap = commit_queues[source_name].get_nowait()
+                            commit_map = {}
+                            for (tp_topic, tp_part), last_offset in tpmap.items():
+                                tp = TopicPartition(tp_topic, tp_part)
+                                # Include leader_epoch (-1) for compatibility with kafka-python versions that
+                                # require an integer leader_epoch; -1 means "no epoch".
+                                commit_map[tp] = OffsetAndMetadata(last_offset + 1, None, -1)
+                            commit_offsets_sync(consumer, commit_map)
+                            commit_queues[source_name].task_done()
+                            drained += 1
+                        if drained:
+                            print({"service": "inference", "event": "commits_applied", "drained_batches": drained, "source": source_name})
+                    except queue.Empty:
+                        pass
+        except Exception as e:
+            print({"service": "inference", "event": "consumer_loop_error", "topic": topic_name, "error": str(e)})
+        finally:
+            try: consumer.close()
+            except Exception: pass
+
+    # Start consumers with the new loop (training, preprocessing, promotion)
+    threading.Thread(target=_consumer_loop, args=(TRAINING_TOPIC, "training"), daemon=True).start()
     print(f"Started Kafka consumer for training topic: {TRAINING_TOPIC}")
 
-    preprocessing_consumer = create_consumer(PREPROCESSING_TOPIC, CONSUMER_GROUP_ID)
-    preprocessing_callback_func = _kafka_callback_factory(inferencer, "preprocessing", message_queue)
-    preprocessing_consumer_thread = threading.Thread(target=consume_messages, args=(preprocessing_consumer, preprocessing_callback_func), daemon=True)
-    preprocessing_consumer_thread.start()
+    threading.Thread(target=_consumer_loop, args=(PREPROCESSING_TOPIC, "preprocessing"), daemon=True).start()
     print(f"Started Kafka consumer for preprocessing topic: {PREPROCESSING_TOPIC}")
 
-    promotion_consumer = create_consumer(PROMOTION_TOPIC, CONSUMER_GROUP_ID)
-    promotion_callback_func = _kafka_callback_factory(inferencer, "promotion", message_queue)
-    promotion_consumer_thread = threading.Thread(target=consume_messages, args=(promotion_consumer, promotion_callback_func), daemon=True)
-    promotion_consumer_thread.start()
+    threading.Thread(target=_consumer_loop, args=(PROMOTION_TOPIC, "promotion"), daemon=True).start()
     print(f"Started Kafka consumer for promotion topic: {PROMOTION_TOPIC}")
 
 

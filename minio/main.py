@@ -8,6 +8,7 @@ from fastapi.responses import StreamingResponse, JSONResponse # type: ignore
 from minio import Minio # type: ignore
 from minio.error import S3Error # type: ignore
 import logging
+import urllib3
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -50,11 +51,20 @@ def startup_event():
     """On startup, initialize the MinIO client and check for the default bucket."""
     global minio_client
     try:
+        # Configure MinIO client with tuned network timeouts to avoid long blocking reads
+        # under concurrent load that can contribute to client disconnects.
+        http = urllib3.PoolManager(
+            timeout=urllib3.Timeout(connect=5.0, read=120.0),
+            maxsize=16,
+            block=True,
+            retries=False,
+        )
         minio_client = Minio(
             ENDPOINT,
             access_key=ACCESS_KEY,
             secret_key=SECRET_KEY,
-            secure=False  # Set to True if using HTTPS
+            secure=False,  # Set to True if using HTTPS
+            http_client=http,
         )
         logger.info(f"Successfully connected to MinIO at {ENDPOINT}.")
 
@@ -209,12 +219,14 @@ async def minio_download(
         if media_type is None:
             media_type = "application/octet-stream"
 
-        # Create a StreamingResponse.
+        # Create a StreamingResponse with small chunks and keep-alive friendly headers.
         return StreamingResponse(
             file_stream.stream(32 * 1024),  # Stream in 32KB chunks
             media_type=media_type,
             headers={
-                "Content-Disposition": f"attachment; filename=\"{os.path.basename(object_name)}\""
+                "Content-Disposition": f"attachment; filename=\"{os.path.basename(object_name)}\"",
+                "Connection": "keep-alive",
+                "Accept-Ranges": "bytes"
             }
         )
 

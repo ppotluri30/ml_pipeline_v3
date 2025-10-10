@@ -1,0 +1,3 @@
+Method,Name,Error,Occurrences
+POST,predict,HTTPError('429 Client Error: Too Many Requests for url: predict'),18
+GET,download_processed,RemoteDisconnected('Remote end closed connection without response'),2

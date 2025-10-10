@@ -12,12 +12,39 @@ from __future__ import annotations
 from fastapi import FastAPI, HTTPException, Request, Body, Query, Response
 from pydantic import BaseModel, Field
 from typing import Optional, Dict, Any, List
-import os, uuid, math, traceback
+import os, uuid, math, traceback, json, time
 import threading
 import asyncio, time
 import pandas as pd
 
 app = FastAPI(title="Inference Synchronous API")
+
+# --- Optional structured resource logging (env-gated via ENABLE_RESOURCE_LOGS) ---
+def _start_resource_logger_if_enabled():
+    try:
+        if os.getenv("ENABLE_RESOURCE_LOGS", "false").lower() not in {"1", "true", "yes"}:
+            return
+        try:
+            import psutil  # type: ignore
+        except Exception:
+            print({"service": "inference", "event": "resource_logger_psutil_missing"})
+            return
+
+        def _log_resource_usage():
+            try:
+                proc = psutil.Process()  # current process
+                proc.cpu_percent(interval=0.0)  # prime
+                while True:
+                    cpu = proc.cpu_percent(interval=0.1)
+                    rss_mb = proc.memory_info().rss / (1024 * 1024)
+                    print({"service": "inference", "event": "resource_usage", "cpu_percent": cpu, "mem_mb": round(rss_mb, 1)})
+                    time.sleep(10)
+            except Exception as e:  # pragma: no cover
+                print({"service": "inference", "event": "resource_logger_error", "error": str(e)})
+
+        threading.Thread(target=_log_resource_usage, daemon=True, name="resource-logger").start()
+    except Exception:
+        pass
 
 # ---------------- Queue / Worker & Readiness Config (env-driven) -----------------
 QUEUE_MAXSIZE = int(os.getenv("QUEUE_MAXSIZE", "40"))  # raised default for smoother concurrency
@@ -26,6 +53,11 @@ INFERENCE_TIMEOUT = float(os.getenv("INFERENCE_TIMEOUT", "15"))
 WAIT_FOR_MODEL = os.getenv("WAIT_FOR_MODEL", "0").lower() in {"1", "true", "yes"}
 MODEL_WAIT_TIMEOUT = float(os.getenv("MODEL_WAIT_TIMEOUT", "60"))  # seconds
 PREWARM_ENABLED = os.getenv("INFERENCE_PREWARM", "1").lower() in {"1", "true", "yes"}
+
+# Optional: expose a test-only Kafka publish endpoint to enqueue inference claims
+ENABLE_PUBLISH_API = os.getenv("ENABLE_PUBLISH_API", "0").lower() in {"1", "true", "yes"}
+_publish_producer = None  # lazy-init if endpoint used
+_publish_topic = os.getenv("PUBLISH_TOPIC", os.getenv("CONSUMER_TOPIC_0", "inference-data"))
 
 _startup_epoch = time.time()
 _startup_ready_ms: float | None = None
@@ -524,6 +556,11 @@ def queue_stats():
 @app.on_event("startup")
 async def _wait_for_model_startup():  # pragma: no cover (startup side-effect)
     global _startup_ready_ms
+    # Start optional resource logger
+    try:
+        _start_resource_logger_if_enabled()
+    except Exception:
+        pass
     # Ensure workers are ready early so that once model arrives we can serve instantly.
     await _start_workers_once()
     if not WAIT_FOR_MODEL:
@@ -564,4 +601,71 @@ async def _wait_for_model_startup():  # pragma: no cover (startup side-effect)
     _startup_ready_ms = int((time.time() - _startup_epoch) * 1000)
     _queue_log("startup_model_wait_timeout", waited_ms=_startup_ready_ms)
     # If model appears shortly after timeout, a later request will trigger prewarm lazily.
+
+if ENABLE_PUBLISH_API:
+    class PublishRequest(BaseModel):
+        bucket: str = Field(default_factory=lambda: os.getenv("PROCESSED_BUCKET", "processed-data"))
+        object_key: str = Field(default_factory=lambda: os.getenv("TEST_OBJECT_KEY", "test_processed_data.parquet"))
+        count: int = Field(default=1, ge=1, le=500000)
+        ttl_ms: Optional[int] = Field(default=None, ge=1, le=86400000)
+        key_prefix: Optional[str] = None
+        identifier: Optional[str] = Field(default_factory=lambda: os.getenv("IDENTIFIER"))
+
+    def _get_publish_producer():
+        global _publish_producer
+        if _publish_producer is None:
+            try:
+                from kafka import KafkaProducer  # type: ignore
+            except Exception as e:  # noqa: BLE001
+                raise HTTPException(status_code=500, detail=f"Kafka client not available: {e}")
+            bootstrap = os.getenv("KAFKA_BOOTSTRAP_SERVERS")
+            if not bootstrap:
+                raise HTTPException(status_code=500, detail="KAFKA_BOOTSTRAP_SERVERS not set")
+            _publish_producer = KafkaProducer(
+                bootstrap_servers=bootstrap,
+                value_serializer=lambda v: json.dumps(v).encode("utf-8"),
+                key_serializer=lambda k: k.encode("utf-8") if k else None,
+            )
+        return _publish_producer
+
+    @app.post("/publish_inference_claims")
+    async def publish_inference_claims(req: "PublishRequest" = Body(...)):
+        """Test-only: publish N inference claim messages to Kafka (inference-data).
+
+        Enabled only when ENABLE_PUBLISH_API=1. Produces simple claim-check JSON with bucket/object.
+        Optional TTL: sets headers.deadline_ms to now+ttl_ms.
+        """
+        if not ENABLE_PUBLISH_API:
+            raise HTTPException(status_code=404, detail="Endpoint disabled")
+        prod = _get_publish_producer()
+        now_ms = int(time.time() * 1000)
+        headers = None
+        if req.ttl_ms:
+            deadline = str(now_ms + int(req.ttl_ms))
+            # kafka-python expects header keys as str and values as bytes
+            headers = [("deadline_ms", deadline.encode("utf-8"))]
+        sent = 0
+        for i in range(int(req.count)):
+            key = None
+            if req.key_prefix:
+                key = f"{req.key_prefix}-{i}"
+            payload = {
+                "bucket": req.bucket,
+                "object": req.object_key,
+            }
+            if req.identifier:
+                payload["identifier"] = req.identifier
+            try:
+                prod.send(_publish_topic, value=payload, key=key, headers=headers)
+                sent += 1
+            except Exception as e:  # noqa: BLE001
+                # Surface exception type to aid debugging
+                _queue_log("publish_claim_error", error=f"{e.__class__.__name__}: {e!s}")
+                raise HTTPException(status_code=500, detail=f"Publish error at i={i}: {e.__class__.__name__}: {e}")
+        try:
+            prod.flush(timeout=10)
+        except Exception:
+            pass
+        _queue_log("publish_claims_ok", topic=_publish_topic, count=sent)
+        return {"status": "ok", "published": sent, "topic": _publish_topic}
 

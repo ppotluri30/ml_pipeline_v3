@@ -1,0 +1,2 @@
+Method,Name,Error,Occurrences
+POST,predict,HTTPError('400 Client Error: Bad Request for url: predict'),92

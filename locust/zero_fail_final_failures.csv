@@ -1,0 +1,3 @@
+Method,Name,Error,Occurrences
+POST,predict,HTTPError('400 Client Error: Bad Request for url: predict'),4432
+GET,download_processed,RemoteDisconnected('Remote end closed connection without response'),3
