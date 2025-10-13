@@ -392,22 +392,6 @@ def healthz():
         model_ready = False
     return {"status": "ok", "service": "inference-api", "model_ready": model_ready, "startup_ready_ms": _startup_ready_ms}
 
-
-@app.get("/ready")
-def ready():
-    """Readiness endpoint usable by orchestrators/healthchecks.
-
-    Returns 200 only when a model is loaded (model_ready==True). Returns 503 otherwise.
-    """
-    try:
-        inf = _get_inferencer()
-        model_ready = inf.current_model is not None
-    except Exception:
-        model_ready = False
-    if model_ready:
-        return Response(content=json.dumps({"status": "ready"}), media_type="application/json", status_code=200)
-    return Response(content=json.dumps({"status": "not_ready"}), media_type="application/json", status_code=503)
-
 def _get_inferencer():
     # Import the shared Inferencer instance from main without triggering
     # main's runtime start side-effects. main._start_runtime is scheduled

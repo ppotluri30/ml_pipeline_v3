@@ -86,6 +86,7 @@ def on_test_start(environment, **kw):  # noqa: D401
         base = PREDICT_URL.rsplit('/', 1)[0]
         health_url = EP_HEALTH if EP_HEALTH.startswith("http") else f"{base}{EP_HEALTH}"
         ok = False
+        # Quick initial probes (fast-fail if service totally down)
         for i in range(1, 4):
             try:
                 resp = requests.get(health_url, timeout=5)
@@ -101,8 +102,46 @@ def on_test_start(environment, **kw):  # noqa: D401
             if ok:
                 break
             time.sleep(1.0)
+
+        # If requested, wait until the inference model reports ready via /healthz.model_ready
+        # CONTROL via env: LOCUST_WAIT_FOR_MODEL (default: true), and timeout LOCUST_WAIT_FOR_MODEL_TIMEOUT (seconds)
+        wait_for_model = os.getenv("LOCUST_WAIT_FOR_MODEL", "1") not in {"0", "false", "FALSE"}
+        wait_timeout = float(os.getenv("LOCUST_WAIT_FOR_MODEL_TIMEOUT", "60"))
+        if wait_for_model:
+            t_deadline = time.time() + wait_timeout
+            model_ready = False
+            # If earlier quick probes succeeded, still verify model_ready flag
+            while time.time() < t_deadline:
+                try:
+                    resp = requests.get(health_url, timeout=5)
+                    if resp is not None and resp.status_code == 200:
+                        try:
+                            js = resp.json()
+                            model_ready = bool(js.get("model_ready"))
+                        except Exception:
+                            model_ready = False
+                    else:
+                        model_ready = False
+                except Exception:
+                    model_ready = False
+                _append_jsonl({
+                    "ts": time.time(),
+                    "event": "warmup_model_ready_check",
+                    "model_ready": model_ready,
+                    "time_left": max(0.0, round(t_deadline - time.time(), 2))
+                })
+                if model_ready:
+                    break
+                time.sleep(1.0)
+            if not model_ready:
+                _append_jsonl({
+                    "ts": time.time(),
+                    "event": "warmup_model_ready_timeout",
+                    "wait_timeout": wait_timeout
+                })
+
         # Small settle delay regardless of health result
-        time.sleep(5.0)
+        time.sleep(2.0)
     except Exception as e:
         _append_jsonl({
             "ts": time.time(),
@@ -327,14 +366,42 @@ class PipelineUser(HttpUser):
             r = self.client.get(ping_url, name="predict_ping", timeout=10)
             in_len = 10
             out_len = 1
+            has_df = False
             if r is not None and r.status_code == 200:
                 try:
                     js = r.json()
                     if isinstance(js, dict):
                         in_len = int(js.get("input_seq_len") or in_len)
                         out_len = int(js.get("output_seq_len") or out_len)
+                        has_df = bool(js.get("has_df"))
                 except Exception:
                     pass
+            if has_df:
+                try:
+                    pr_cached = self.client.post(PREDICT_URL, json={}, name="predict_warmup", timeout=60)
+                except Exception as exc:
+                    pr_cached = None
+                    _append_jsonl({
+                        "ts": time.time(),
+                        "event": "predict_warmup_cached_error",
+                        "error": str(exc),
+                    })
+                else:
+                    ok_cached = pr_cached is not None and pr_cached.status_code == 200
+                    _append_jsonl({
+                        "ts": time.time(),
+                        "event": "predict_warmup_result",
+                        "status_code": None if pr_cached is None else pr_cached.status_code,
+                        "ok": ok_cached,
+                        "mode": "cached",
+                        "rows": None,
+                        "in_len": in_len,
+                        "out_len": out_len,
+                    })
+                    if ok_cached:
+                        _predict_ready = True
+                        _warmup_done = True
+                        return
             # Build minimal payload with uniform 1-minute sampling
             import datetime as _dt, math as _math
             total = max(in_len + out_len + 5, 16)
@@ -380,6 +447,7 @@ class PipelineUser(HttpUser):
                 "event": "predict_warmup_result",
                 "status_code": None if pr is None else pr.status_code,
                 "ok": ok,
+                "mode": "synthetic",
                 "rows": total,
                 "in_len": in_len,
                 "out_len": out_len,

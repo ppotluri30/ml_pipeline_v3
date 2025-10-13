@@ -285,6 +285,8 @@ services:
         condition: service_started
       kafka:
         condition: service_healthy
+      inference:
+        condition: service_healthy
     working_dir: /mnt/locust
     volumes:
       - ./locust:/mnt/locust
@@ -295,11 +297,14 @@ services:
       - ENDPOINT_DOWNLOAD_ALT=http://fastapi-app:8000/download/processed-data/processed_data.parquet
       - PREDICT_URL=http://inference:8000/predict
       - PREDICT_WARMUP_DISABLE=0
+      - LOCUST_WAIT_FOR_MODEL=1
+      - LOCUST_WAIT_FOR_MODEL_TIMEOUT=180
       - KAFKA_BURST=0
       - KAFKA_BURST_COUNT=5000
       - KAFKA_BURST_TTL_MS=
       - KAFKA_BURST_KEY_PREFIX=
       - LOCUST_MODE=ui
+      - TARGET_HOST=http://inference:8000
     command:
       - -f
       - /mnt/locust/locustfile.py
@@ -371,13 +376,14 @@ services:
       - RUN_INFERENCE_ON_TRAIN_SUCCESS=1
       - DISABLE_STARTUP_INFERENCE=1
       - PREDICT_PROGRESS_INTERVAL=0
-      # Added concurrency / readiness / pre-warm controls
+      # Concurrency / readiness / pre-warm controls
       - WAIT_FOR_MODEL=1
       - MODEL_WAIT_TIMEOUT=5
       - INFERENCE_PREWARM=1
       - QUEUE_WORKERS=2
       - QUEUE_MAXSIZE=40
       - INFERENCE_TIMEOUT=15
+      - INFERENCE_START_IN_APP=1
       # Kafka backpressure and commit controls (bounded queue inside runtime)
       - USE_BOUNDED_QUEUE=1
       - USE_MANUAL_COMMIT=1
@@ -389,12 +395,20 @@ services:
       - BATCH_SIZE=32
       - BATCH_TIMEOUT_MS=25
       - ENABLE_TTL=1
-      # Test-only: expose publish API and tweak keep-alive for connection stability under load
+      # Test-only: expose publish API and tune uvicorn keepalive during load tests
       - ENABLE_PUBLISH_API=1
       - UVICORN_KEEPALIVE=30
+    # Ensure the service binds to 0.0.0.0 inside the container so other containers can reach it
+    # Use the package/module name `api_server:app` (this matches the project layout and Dockerfile CMD)
+    command: ["sh", "-c", "exec uvicorn api_server:app --host 0.0.0.0 --port 8000 --log-level debug --access-log"]
     networks:
       - common
       - app-network
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys;\ntry:\n r=urllib.request.urlopen('http://localhost:8000/ready', timeout=5);\n sys.exit(0 if r.getcode()==200 else 1)\nexcept Exception:\n sys.exit(1)\""]
+      interval: 5s
+      timeout: 3s
+      retries: 40
     # Druid coordinator host mapping removed
 
   eval:

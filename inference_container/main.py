@@ -576,7 +576,12 @@ def _attempt_load_promoted(service: Inferencer):
     except Exception as e:  # noqa: BLE001
         print({"service": "inference", "event": "promotion_autoload_fail", "error": str(e)})
 
-_preload_test_dataframe(inferencer)
+# NOTE: Previously this preload ran at import time which could block callers
+# that import this module (for example the FastAPI app via `from main import inferencer`).
+# Running long IO during import prevents the API from responding to readiness
+# probes. We intentionally DO NOT call _preload_test_dataframe here; the preload
+# is invoked from _start_runtime() when the runtime is started explicitly.
+
 
 def _load_promoted_pointer(service: Inferencer):
     """Load the most recent promoted model based on a pointer manifest.
@@ -668,6 +673,14 @@ def _start_runtime():
         return
     _RUNTIME_STARTED = True
     print({"service": "inference", "event": "runtime_start", "note": "Starting background threads"})
+    # Run the preload here (was previously at import time). Running it during
+    # runtime start ensures the API can be imported quickly and /ready can
+    # respond without being blocked by IO.
+    try:
+        _preload_test_dataframe(inferencer)
+    except Exception as e:
+        print({"service": "inference", "event": "preload_run_error", "error": str(e)})
+
     _load_promoted_pointer(inferencer)
 
     # Start the worker thread, passing the service instance and queue
@@ -794,8 +807,10 @@ def _graceful_shutdown():
         print("Kafka consumers and producer closed.")
 
 
-# Start runtime immediately on import unless explicitly disabled (e.g., tests)
-if os.environ.get("INFERENCE_AUTOSTART", "1") in {"1", "true", "TRUE"}:
+# Do NOT start runtime automatically at import time. Runtime is started by
+# the FastAPI app during its non-blocking startup handler so the HTTP server
+# binds immediately and background model loading does not block Uvicorn.
+def start_runtime_safe():
     try:
         _start_runtime()
     except Exception as e:  # noqa: BLE001
@@ -806,6 +821,8 @@ if __name__ == "__main__":
     # When executed as a script, keep process alive.
     try:
         print({"service": "inference", "event": "main_loop_enter"})
+        # Start runtime when running as the main process (local debug)
+        start_runtime_safe()
         while True:
             time.sleep(1)
     except KeyboardInterrupt:

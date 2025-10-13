@@ -367,7 +367,40 @@ class Inferencer:
 
             for step in range(local_inference_length):
                 # Predict a full block of up to output_seq_len steps
-                multi_step_pred = self.current_model.predict(current_sequence.cpu().numpy())  # type: ignore
+                # The MLflow pyfunc.predict implementation often expects 2-D inputs (n_samples, n_features).
+                # Many torch pipelines build 3-D tensors (1, seq_len, n_features). Wrap predict with
+                # tolerant fallbacks: try as-is, then squeeze leading batch dim, then flatten to 2-D.
+                data_np = current_sequence.cpu().numpy()
+                try:
+                    multi_step_pred = self.current_model.predict(data_np)  # type: ignore
+                except Exception as e_pred:
+                    # Log the original error and attempt fallbacks
+                    print({
+                        "service": "inference",
+                        "event": "pyfunc_predict_error",
+                        "error": str(e_pred),
+                        "shape": getattr(data_np, "shape", None),
+                    })
+                    multi_step_pred = None
+                    # Strategy 1: squeeze leading singleton batch dim -> (seq_len, n_features)
+                    try:
+                        if data_np.ndim == 3 and data_np.shape[0] == 1:
+                            alt = data_np.squeeze(0)
+                            multi_step_pred = self.current_model.predict(alt)  # type: ignore
+                            print({"service": "inference", "event": "pyfunc_predict_fallback_squeeze", "orig_shape": data_np.shape, "new_shape": getattr(alt, "shape", None)})
+                    except Exception as e2:
+                        print({"service": "inference", "event": "pyfunc_predict_fallback_squeeze_fail", "error": str(e2)})
+                    # Strategy 2: flatten all timesteps into single feature vector -> (1, seq_len*n_features)
+                    if multi_step_pred is None:
+                        try:
+                            flat = data_np.reshape(1, -1)
+                            multi_step_pred = self.current_model.predict(flat)  # type: ignore
+                            print({"service": "inference", "event": "pyfunc_predict_fallback_flatten", "orig_shape": data_np.shape, "new_shape": getattr(flat, "shape", None)})
+                        except Exception as e3:
+                            print({"service": "inference", "event": "pyfunc_predict_fallback_flatten_fail", "error": str(e3)})
+                    # If still None, raise original exception to be handled upstream
+                    if multi_step_pred is None:
+                        raise
                 steps_to_use = min(self.output_seq_len, local_inference_length - step)
 
                 for i in range(steps_to_use):
