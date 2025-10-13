@@ -14,3 +14,4 @@ scikit-learn==1.7.1
 kafka-python[crc32c]==2.2.15
 psutil==7.0.0
 boto3==1.34.74
+prometheus_client==0.18.0

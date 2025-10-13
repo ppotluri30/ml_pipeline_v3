@@ -8,6 +8,8 @@ from mlflow.artifacts import download_artifacts  # type: ignore
 import os
 import pickle
 import tempfile
+import asyncio
+import logging
 from typing import Tuple, Optional, Union
 from sklearn.preprocessing import MinMaxScaler, StandardScaler, RobustScaler, MaxAbsScaler
 
@@ -18,6 +20,30 @@ SAMPLE_IDX = int(os.environ.get("SAMPLE_IDX", 0))
 INFERENCE_LENGTH = int(os.environ.get("INFERENCE_LENGTH", 1))
 
 INFER_VERSION = "infer_v20251002_04"
+
+logger = logging.getLogger("inference.inferencer")
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    formatter = logging.Formatter("%(asctime)s %(levelname)s [%(name)s] %(message)s")
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+logger.setLevel(logging.INFO)
+logger.propagate = False
+
+
+def _read_simulated_delay() -> float:
+    raw = os.getenv("SIMULATE_DELAY_SECS", "0")
+    if raw is None:
+        return 0.0
+    try:
+        value = float(str(raw).strip())
+    except (TypeError, ValueError):
+        logger.warning("Invalid SIMULATE_DELAY_SECS value '%s'; defaulting to 0", raw)
+        return 0.0
+    return max(0.0, value)
+
+
+SIMULATE_DELAY_SECS = _read_simulated_delay()
 
 class Inferencer:
     def __init__(self, gateway_url: str, producer, dlq_topic: str, output_topic: str):
@@ -40,6 +66,16 @@ class Inferencer:
         self.busy = False
         # Track which run_ids we've already attempted scaler resolution for (prevents spammy logs)
         self._scaler_checked_run_ids = set()
+        self.simulate_delay_secs = SIMULATE_DELAY_SECS
+        logger.info("SIMULATE_DELAY_SECS=%s", self.simulate_delay_secs)
+
+    async def simulate_delay_if_enabled(self) -> None:
+        delay = _read_simulated_delay()
+        self.simulate_delay_secs = delay
+        if delay <= 0:
+            return
+        logger.info("Simulating inference delay: %ss", delay)
+        await asyncio.sleep(delay)
 
     def load_model(self, experiment_name: str, run_name: str, sort: str="Recent"):
         print(f"[Inferencer:{INFER_VERSION}] Attempting to load model for experiment: {experiment_name}, run: {run_name}")

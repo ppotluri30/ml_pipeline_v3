@@ -15,7 +15,28 @@ from typing import Optional, Dict, Any, List
 import os, uuid, math, traceback, json, time
 import threading
 import asyncio, time
+import contextlib
 import pandas as pd
+
+# Prometheus metrics (optional dependency)
+try:
+    from prometheus_client import Gauge, Counter, start_http_server  # type: ignore
+    _PROMETHEUS_AVAILABLE = True
+except Exception:
+    _PROMETHEUS_AVAILABLE = False
+
+if _PROMETHEUS_AVAILABLE:
+    QUEUE_LEN = Gauge("inference_queue_len", "Current queue size")
+    ACTIVE_WORKERS = Gauge("inference_active_workers", "Running worker tasks")
+    JOBS_PROCESSED = Counter("inference_jobs_processed_total", "Total processed jobs")
+    MODEL_READY = Gauge("inference_model_ready", "Whether model is ready (1=yes,0=no)")
+else:
+    # Fallback no-op objects to avoid guarding metrics everywhere
+    QUEUE_LEN = ACTIVE_WORKERS = MODEL_READY = None
+    class _NoopCounter:
+        def inc(self, *a, **k):
+            return
+    JOBS_PROCESSED = _NoopCounter()
 
 app = FastAPI(title="Inference Synchronous API")
 
@@ -48,11 +69,26 @@ def _start_resource_logger_if_enabled():
 
 # ---------------- Queue / Worker & Readiness Config (env-driven) -----------------
 QUEUE_MAXSIZE = int(os.getenv("QUEUE_MAXSIZE", "40"))  # raised default for smoother concurrency
-QUEUE_WORKERS = max(1, int(os.getenv("QUEUE_WORKERS", "1")))
+# allow slightly higher default concurrency; runtime scaling via env (container restart)
+QUEUE_WORKERS = max(1, int(os.getenv("QUEUE_WORKERS", "2")))
 INFERENCE_TIMEOUT = float(os.getenv("INFERENCE_TIMEOUT", "15"))
 WAIT_FOR_MODEL = os.getenv("WAIT_FOR_MODEL", "0").lower() in {"1", "true", "yes"}
 MODEL_WAIT_TIMEOUT = float(os.getenv("MODEL_WAIT_TIMEOUT", "60"))  # seconds
 PREWARM_ENABLED = os.getenv("INFERENCE_PREWARM", "1").lower() in {"1", "true", "yes"}
+
+
+def _read_monitor_interval(default: float = 0.5) -> float:
+    raw = os.getenv("QUEUE_MONITOR_INTERVAL_SECS")
+    if not raw:
+        return default
+    try:
+        val = float(raw)
+    except (TypeError, ValueError):
+        return default
+    return max(0.05, val)
+
+
+QUEUE_MONITOR_INTERVAL_SECS = _read_monitor_interval()
 
 # Optional: expose a test-only Kafka publish endpoint to enqueue inference claims
 ENABLE_PUBLISH_API = os.getenv("ENABLE_PUBLISH_API", "0").lower() in {"1", "true", "yes"}
@@ -65,6 +101,10 @@ _startup_ready_ms: float | None = None
 
 _inference_queue: asyncio.Queue | None = None
 _workers_started = False
+_worker_tasks: list[asyncio.Task] = []
+_worker_stop_events: dict[int, asyncio.Event] = {}
+_queue_monitor_task: asyncio.Task | None = None
+_queue_monitor_stop_event: asyncio.Event | None = None
 
 # Serialize underlying model.predict / perform_inference calls to avoid shared state races.
 _MODEL_INFER_LOCK = threading.Lock()
@@ -212,23 +252,107 @@ def _queue_log(event: str, **extra):  # central helper for structured logs
     except Exception:
         pass
 
+
+def _safe_queue_size() -> int:
+    try:
+        return _inference_queue.qsize() if _inference_queue else 0
+    except Exception:
+        return 0
+
+
+async def _start_queue_monitor():
+    global _queue_monitor_task, _queue_monitor_stop_event
+    if not _PROMETHEUS_AVAILABLE:
+        return
+    if _queue_monitor_task and not _queue_monitor_task.done():
+        return
+    stop_event = asyncio.Event()
+    _queue_monitor_stop_event = stop_event
+
+    async def _monitor_loop():
+        _queue_log("queue_monitor_started", interval=QUEUE_MONITOR_INTERVAL_SECS)
+        try:
+            while not stop_event.is_set():
+                try:
+                    QUEUE_LEN.set(_safe_queue_size())
+                except Exception:
+                    pass
+                try:
+                    await asyncio.wait_for(stop_event.wait(), timeout=QUEUE_MONITOR_INTERVAL_SECS)
+                except asyncio.TimeoutError:
+                    continue
+        finally:
+            try:
+                QUEUE_LEN.set(_safe_queue_size())
+            except Exception:
+                pass
+            _queue_log("queue_monitor_stopped")
+
+    _queue_monitor_task = asyncio.create_task(_monitor_loop())
+
+
+async def _stop_queue_monitor():
+    global _queue_monitor_task, _queue_monitor_stop_event
+    if _queue_monitor_stop_event:
+        _queue_monitor_stop_event.set()
+    task = _queue_monitor_task
+    if task:
+        try:
+            await asyncio.wait_for(task, timeout=2.0)
+        except asyncio.TimeoutError:
+            task.cancel()
+            with contextlib.suppress(Exception):
+                await task
+        finally:
+            _queue_monitor_task = None
+            _queue_monitor_stop_event = None
+    else:
+        _queue_monitor_stop_event = None
+
 async def _start_workers_once():
     global _workers_started, _inference_queue
     if _workers_started:
         return
     _inference_queue = asyncio.Queue(maxsize=QUEUE_MAXSIZE)
     for i in range(QUEUE_WORKERS):
-        asyncio.create_task(_worker_loop(i))
+        stop_evt = asyncio.Event()
+        task = asyncio.create_task(_worker_loop(i, stop_evt))
+        _worker_tasks.append(task)
+        _worker_stop_events[i] = stop_evt
         # explicit per-worker start log (human readable + structured)
         print(f"[queue] worker-{i} started", flush=True)
         _queue_log("queue_worker_started", worker=i)
     _workers_started = True
     _queue_log("queue_workers_started", workers=QUEUE_WORKERS, maxsize=QUEUE_MAXSIZE, timeout=INFERENCE_TIMEOUT)
+    # Metrics: set initial values
+    try:
+        if _PROMETHEUS_AVAILABLE:
+            QUEUE_LEN.set(0)
+            ACTIVE_WORKERS.set(0)
+            MODEL_READY.set(0)
+    except Exception:
+        pass
 
-async def _worker_loop(worker_idx: int):  # pragma: no cover (long-lived)
+async def _worker_loop(worker_idx: int, stop_event: asyncio.Event):  # pragma: no cover (long-lived)
     while True:
+        # update queue length before popping so metric reflects queued items
+        try:
+            if _PROMETHEUS_AVAILABLE and _inference_queue is not None:
+                QUEUE_LEN.set(_inference_queue.qsize())
+        except Exception:
+            pass
+        # Check for stop request before waiting for next job
+        if stop_event.is_set():
+            _queue_log("queue_worker_stopping_before_get", worker=worker_idx)
+            break
         job: _InferenceJob = await _inference_queue.get()  # type: ignore
         queue_metrics["active"] += 1
+        try:
+            if _PROMETHEUS_AVAILABLE:
+                ACTIVE_WORKERS.inc()
+                ACTIVE_WORKERS.set(queue_metrics["active"])
+        except Exception:
+            pass
         wait_ms = int((time.time() - job.enqueue_time) * 1000)
         queue_metrics["total_wait_ms"] += wait_ms
         queue_metrics["wait_samples"] += 1
@@ -238,6 +362,11 @@ async def _worker_loop(worker_idx: int):  # pragma: no cover (long-lived)
             if not job.future.done():
                 job.future.set_result(result)
             queue_metrics["completed"] += 1
+            try:
+                if _PROMETHEUS_AVAILABLE:
+                    JOBS_PROCESSED.inc()
+            except Exception:
+                pass
             _queue_log("queue_job_done", req_id=job.req_id, worker=worker_idx, active=queue_metrics["active"], completed=queue_metrics["completed"])
         except asyncio.TimeoutError:
             queue_metrics["timeouts"] += 1
@@ -260,9 +389,22 @@ async def _worker_loop(worker_idx: int):  # pragma: no cover (long-lived)
         finally:
             queue_metrics["active"] -= 1
             try:
+                if _PROMETHEUS_AVAILABLE and _inference_queue is not None:
+                    # update gauges after finishing work
+                    ACTIVE_WORKERS.set(max(0, queue_metrics.get("active", 0)))
+                    QUEUE_LEN.set(_inference_queue.qsize())
+            except Exception:
+                pass
+            try:
                 _inference_queue.task_done()  # type: ignore
             except Exception:
                 pass
+    _queue_log("queue_worker_exited", worker=worker_idx)
+    # cleanup mapping for this worker if present
+    try:
+        _worker_stop_events.pop(worker_idx, None)
+    except Exception:
+        pass
 
 async def _execute_inference(req: PredictRequest | None, inference_length_param: int | None, req_id: str):
     inf = _get_inferencer()
@@ -320,6 +462,9 @@ async def _execute_inference(req: PredictRequest | None, inference_length_param:
         return {"status": "SUCCESS", "identifier": os.getenv("IDENTIFIER") or "default", "run_id": getattr(inf, "current_run_id", None), "predictions": []}
 
     try:
+        maybe_delay = getattr(inf, "simulate_delay_if_enabled", None)
+        if callable(maybe_delay):
+            await maybe_delay()
         # Wrap perform_inference in a thread function that enforces single-flight execution.
         def _locked_infer():
             with _MODEL_INFER_LOCK:
@@ -390,7 +535,8 @@ def healthz():
         model_ready = inf.current_model is not None
     except Exception:
         model_ready = False
-    return {"status": "ok", "service": "inference-api", "model_ready": model_ready, "startup_ready_ms": _startup_ready_ms}
+    qsize = _inference_queue.qsize() if _inference_queue else 0
+    return {"status": "ok", "service": "inference-api", "model_ready": model_ready, "queue_length": qsize, "startup_ready_ms": _startup_ready_ms}
 
 
 @app.get("/ready")
@@ -507,6 +653,11 @@ async def reload_latest():  # pragma: no cover (operational endpoint)
         inf = _get_inferencer()
     except Exception:  # noqa: BLE001
         pass
+    try:
+        if _PROMETHEUS_AVAILABLE:
+            MODEL_READY.set(1 if loaded else 0)
+    except Exception:
+        pass
     return {
         "status": "loaded" if loaded else "not_loaded",
         "run_id": getattr(inf, "current_run_id", None) if inf else None,
@@ -546,9 +697,19 @@ async def predict(
     try:
         _inference_queue.put_nowait(job)
         queue_metrics["enqueued"] += 1
+        try:
+            if _PROMETHEUS_AVAILABLE and _inference_queue is not None:
+                QUEUE_LEN.set(_inference_queue.qsize())
+        except Exception:
+            pass
         _queue_log("queue_job_enqueued", req_id=req_id, qsize=_inference_queue.qsize(), enqueued=queue_metrics["enqueued"], active=queue_metrics["active"])
     except asyncio.QueueFull:
         queue_metrics["rejected_full"] += 1
+        try:
+            if _PROMETHEUS_AVAILABLE and _inference_queue is not None:
+                QUEUE_LEN.set(_inference_queue.qsize())
+        except Exception:
+            pass
         _queue_log("queue_job_rejected_full", req_id=req_id, rejected=queue_metrics["rejected_full"], qsize=_inference_queue.qsize() if _inference_queue else None)
         # Provide Retry-After hint (100ms) to cooperative clients
         raise HTTPException(status_code=429, detail="Server busy, try again", headers={"Retry-After": "0.1"})
@@ -597,6 +758,21 @@ async def _startup_event_nonblocking():  # pragma: no cover (startup side-effect
     except Exception:
         pass
 
+    # Start Prometheus exporter if available
+    try:
+        if _PROMETHEUS_AVAILABLE:
+            start_http_server(9091)
+            print(f"Started {QUEUE_WORKERS} workers | Queue maxsize = {QUEUE_MAXSIZE} | Metrics -> :9091", flush=True)
+        else:
+            print(f"Started {QUEUE_WORKERS} workers | Queue maxsize = {QUEUE_MAXSIZE} | Metrics disabled (prometheus_client not installed)", flush=True)
+    except Exception:
+        pass
+
+    try:
+        await _start_queue_monitor()
+    except Exception:
+        _queue_log("queue_monitor_start_failed")
+
     async def _background_startup():
         nonlocal_ready_ms = None
         if not WAIT_FOR_MODEL:
@@ -613,6 +789,11 @@ async def _startup_event_nonblocking():  # pragma: no cover (startup side-effect
                 if inf.current_model is not None:
                     _startup_ready_ms = int((time.time() - _startup_epoch) * 1000)
                     _queue_log("startup_model_ready", ready_ms=_startup_ready_ms)
+                    try:
+                        if _PROMETHEUS_AVAILABLE:
+                            MODEL_READY.set(1)
+                    except Exception:
+                        pass
                     # Fire prewarm (don't block readiness longer than needed)
                     try:
                         await _prewarm_if_needed()
@@ -633,6 +814,11 @@ async def _startup_event_nonblocking():  # pragma: no cover (startup side-effect
                 inf = _get_inferencer()
                 _startup_ready_ms = int((time.time() - _startup_epoch) * 1000)
                 _queue_log("startup_model_ready_fallback", ready_ms=_startup_ready_ms, run_id=getattr(inf, "current_run_id", None))
+                try:
+                    if _PROMETHEUS_AVAILABLE:
+                        MODEL_READY.set(1)
+                except Exception:
+                    pass
                 try:
                     await _prewarm_if_needed()
                 except Exception:
@@ -669,6 +855,14 @@ async def _startup_event_nonblocking():  # pragma: no cover (startup side-effect
         asyncio.create_task(_background_startup())
     except Exception:
         # fall back to ensure we don't block startup if create_task fails
+        pass
+
+
+@app.on_event("shutdown")
+async def _shutdown_event():  # pragma: no cover (shutdown side-effect)
+    try:
+        await _stop_queue_monitor()
+    except Exception:
         pass
 
 if ENABLE_PUBLISH_API:
@@ -737,4 +931,85 @@ if ENABLE_PUBLISH_API:
             pass
         _queue_log("publish_claims_ok", topic=_publish_topic, count=sent)
         return {"status": "ok", "published": sent, "topic": _publish_topic}
+
+
+@app.post("/scale_workers")
+async def scale_workers(payload: dict = Body(...)):
+    """Dynamically scale the number of worker tasks.
+
+    Body: { "workers": <int> }
+    """
+    global _worker_tasks
+    try:
+        desired = int(payload.get("workers", 0))
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid 'workers' value")
+    if desired < 1 or desired > 16:
+        raise HTTPException(status_code=400, detail="workers must be between 1 and 16")
+
+    old = len(_worker_tasks)
+    if desired == old:
+        return {"old_workers": old, "new_workers": desired, "status": "no_change"}
+
+    # scale up
+    if desired > old:
+        next_idx = max(_worker_stop_events.keys(), default=-1) + 1
+        for i in range(old, desired):
+            stop_evt = asyncio.Event()
+            task = asyncio.create_task(_worker_loop(next_idx, stop_evt))
+            _worker_tasks.append(task)
+            _worker_stop_events[next_idx] = stop_evt
+            print(f"[queue] worker-{next_idx} started (scale up)", flush=True)
+            _queue_log("queue_worker_started_scale_up", worker=next_idx)
+            next_idx += 1
+        # Update prometheus active workers gauge if available
+        try:
+            if _PROMETHEUS_AVAILABLE:
+                ACTIVE_WORKERS.set(len(_worker_tasks))
+        except Exception:
+            pass
+        _queue_log("queue_workers_scaled", old=old, new=desired, reason="manual")
+        print(f"Scaled workers from {old} -> {desired} (manual request via /scale_workers)")
+        return {"old_workers": old, "new_workers": desired, "status": "scaled_up"}
+
+    # scale down: signal the highest-index workers to stop
+    if desired < old:
+        to_stop = old - desired
+        stopped = 0
+        # iterate over a copy so we can mutate _worker_tasks
+        for idx in sorted(list(_worker_stop_events.keys()), reverse=True):
+            if stopped >= to_stop:
+                break
+            try:
+                _worker_stop_events[idx].set()
+                _queue_log("queue_worker_stop_requested", worker=idx)
+                stopped += 1
+            except Exception:
+                pass
+
+        # wait for tasks to exit (with timeout)
+        wait_deadline = time.time() + 10.0
+        while time.time() < wait_deadline and len(_worker_tasks) > desired:
+            # compact finished tasks
+            _worker_tasks = [t for t in _worker_tasks if not t.done()]
+            await asyncio.sleep(0.1)
+
+        # final cleanup: cancel any remaining tasks that didn't stop gracefully
+        if len(_worker_tasks) > desired:
+            remaining = len(_worker_tasks) - desired
+            for _ in range(remaining):
+                t = _worker_tasks.pop()
+                try:
+                    t.cancel()
+                except Exception:
+                    pass
+
+        try:
+            if _PROMETHEUS_AVAILABLE:
+                ACTIVE_WORKERS.set(len(_worker_tasks))
+        except Exception:
+            pass
+        _queue_log("queue_workers_scaled", old=old, new=desired, reason="manual")
+        print(f"Scaled workers from {old} -> {desired} (manual request via /scale_workers)")
+        return {"old_workers": old, "new_workers": desired, "status": "scaled_down"}
 

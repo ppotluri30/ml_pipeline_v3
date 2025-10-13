@@ -384,6 +384,7 @@ services:
       - QUEUE_MAXSIZE=40
       - INFERENCE_TIMEOUT=15
       - INFERENCE_START_IN_APP=1
+      - SIMULATE_DELAY_SECS=0 # Default off; override locally only when testing artificial latency
       # Kafka backpressure and commit controls (bounded queue inside runtime)
       - USE_BOUNDED_QUEUE=1
       - USE_MANUAL_COMMIT=1
@@ -410,6 +411,34 @@ services:
       timeout: 3s
       retries: 40
     # Druid coordinator host mapping removed
+
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    depends_on:
+      inference:
+        condition: service_started
+    networks:
+      - app-network
+
+  grafana:
+    image: grafana/grafana-oss:latest
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+    depends_on:
+      prometheus:
+        condition: service_started
+    networks:
+      - app-network
 
   eval:
     build: ./eval_container
