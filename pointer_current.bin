@@ -1,0 +1,6 @@
+--afe7149542c55f5b00c247dfc711a19a
+Content-Disposition: form-data; name="file"; filename="current.json"
+Content-Type: application/json
+
+{"identifier":"","config_hash":"eab7f59ada0acba006771c40c8eae95f37648e24d610f023cb6f29175e93d952","run_id":"0f36e085d77441aca95e0d722f655d95","model_type":"GRU","experiment":"Default","model_uri":"runs:/0f36e085d77441aca95e0d722f655d95/GRU","rmse":0.038816059092377835,"mae":0.027657778933644295,"mse":0.0015066864434629679,"score":0.028006700514974798,"timestamp":"2025-10-14T21:39:34.395436Z","weights":{"rmse":0.5,"mae":0.3,"mse":0.2}}
+--afe7149542c55f5b00c247dfc711a19a--

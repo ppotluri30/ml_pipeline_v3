@@ -134,10 +134,13 @@ if 'data_utils' not in sys.modules:
         return df
     def subset_scaler(s, orig_cols, cols):
         return s
+    def strip_timezones(df):
+        return df, {"index": False, "columns": []}
     du.window_data = window_data
     du.check_uniform = check_uniform
     du.time_to_feature = time_to_feature
     du.subset_scaler = subset_scaler
+    du.strip_timezones = strip_timezones
     sys.modules['data_utils'] = du
 
 # Stub sklearn preprocessing used by inferencer

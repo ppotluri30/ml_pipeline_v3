@@ -1,5 +1,6 @@
 # predict_container/main.py
 from client_utils import get_file, post_file
+from data_utils import strip_timezones
 from kafka_utils import (
     create_producer,
     create_consumer,
@@ -343,6 +344,15 @@ def message_handler(service: Inferencer, message_queue: queue.Queue):
                             parquet_bytes = get_file(service.gateway_url, bucket, object_key)
                             table = pq.read_table(source=parquet_bytes)
                             service.df = table.to_pandas()
+                            service.df, tz_meta = strip_timezones(service.df)
+                            if tz_meta.get("index") or tz_meta.get("columns"):
+                                print({
+                                    "service": "inference",
+                                    "event": "preprocess_dataframe_tz_normalized",
+                                    "object_key": object_key,
+                                    "index_adjusted": bool(tz_meta.get("index")),
+                                    "columns_adjusted": tz_meta.get("columns", []),
+                                })
 
                             if service.current_model is not None:
                                 service.perform_inference(service.df)

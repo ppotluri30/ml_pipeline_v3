@@ -376,13 +376,14 @@ services:
       - RUN_INFERENCE_ON_TRAIN_SUCCESS=1
       - DISABLE_STARTUP_INFERENCE=1
       - PREDICT_PROGRESS_INTERVAL=0
+      - DISABLE_INFERENCE_CACHE=1
       # Concurrency / readiness / pre-warm controls
       - WAIT_FOR_MODEL=1
       - MODEL_WAIT_TIMEOUT=5
       - INFERENCE_PREWARM=1
-      - QUEUE_WORKERS=2
+      - QUEUE_WORKERS=1
       - QUEUE_MAXSIZE=40
-      - INFERENCE_TIMEOUT=15
+      - INFERENCE_TIMEOUT=60
       - INFERENCE_START_IN_APP=1
       - SIMULATE_DELAY_SECS=0 # Default off; override locally only when testing artificial latency
       # Kafka backpressure and commit controls (bounded queue inside runtime)

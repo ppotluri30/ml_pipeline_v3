@@ -407,7 +407,7 @@ class PipelineUser(HttpUser):
             total = max(in_len + out_len + 5, 16)
             t0 = _dt.datetime.now(_dt.timezone.utc).replace(microsecond=0)
             times_dt = [t0 + _dt.timedelta(minutes=i) for i in range(total)]
-            times = [ts.isoformat() for ts in times_dt]
+            times = [ts.replace(tzinfo=None).isoformat() for ts in times_dt]
             vals = [float(i % 10) for i in range(total)]
             # Time features as required by the service: {min_of_day,day_of_week,day_of_year}_{sin,cos}
             mod = 1440.0

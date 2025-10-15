@@ -75,8 +75,8 @@
             "uid": "inference-prom"
           },
           "editorMode": "code",
-          "expr": "inference_queue_len",
-          "legendFormat": "queue_len",
+          "expr": "max_over_time(inference_queue_len[30s])",
+          "legendFormat": "queue_len_max_30s",
           "range": true,
           "refId": "A"
         }
@@ -136,8 +136,8 @@
             "uid": "inference-prom"
           },
           "editorMode": "code",
-          "expr": "inference_active_workers",
-          "legendFormat": "active_workers",
+          "expr": "max_over_time(inference_active_workers[30s])",
+          "legendFormat": "active_workers_max_30s",
           "range": true,
           "refId": "A"
         }
@@ -262,6 +262,377 @@
       ],
       "title": "Model Ready",
       "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "inference-prom"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 18
+      },
+      "id": 5,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "inference-prom"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.5, sum(rate(inference_queue_wait_seconds_bucket[5m])) by (le))",
+          "legendFormat": "wait_p50",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "inference-prom"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum(rate(inference_queue_wait_seconds_bucket[5m])) by (le))",
+          "legendFormat": "wait_p95",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "inference-prom"
+          },
+          "editorMode": "code",
+          "expr": "inference_queue_wait_latest_seconds",
+          "legendFormat": "wait_latest",
+          "range": true,
+          "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "inference-prom"
+          },
+          "editorMode": "code",
+          "expr": "inference_queue_oldest_wait_seconds",
+          "legendFormat": "oldest_wait",
+          "range": true,
+          "refId": "D"
+        }
+      ],
+      "title": "Queue Wait (s)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "inference-prom"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 18
+      },
+      "id": 6,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "inference-prom"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.5, sum(rate(inference_latency_seconds_bucket[5m])) by (le))",
+          "legendFormat": "latency_p50",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "inference-prom"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum(rate(inference_latency_seconds_bucket[5m])) by (le))",
+          "legendFormat": "latency_p95",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "inference-prom"
+          },
+          "editorMode": "code",
+          "expr": "inference_latency_latest_seconds",
+          "legendFormat": "latency_latest",
+          "range": true,
+          "refId": "C"
+        }
+      ],
+      "title": "Inference Duration (s)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "inference-prom"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 27
+      },
+      "id": 7,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "inference-prom"
+          },
+          "editorMode": "code",
+          "expr": "avg_over_time(inference_worker_utilization[30s])",
+          "legendFormat": "utilization_avg_30s",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "inference-prom"
+          },
+          "editorMode": "code",
+          "expr": "max_over_time(inference_workers_busy[30s])",
+          "legendFormat": "workers_busy_max_30s",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "inference-prom"
+          },
+          "editorMode": "code",
+          "expr": "inference_workers_idle",
+          "legendFormat": "workers_idle",
+          "range": true,
+          "refId": "C"
+        }
+      ],
+      "title": "Worker Utilization",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "inference-prom"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 27
+      },
+      "id": 8,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "inference-prom"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(inference_jobs_outcome_total{outcome=\"success\"}[5m]))",
+          "legendFormat": "success_rps",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "inference-prom"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(inference_jobs_outcome_total{outcome=\"timeout\"}[5m]))",
+          "legendFormat": "timeout_rps",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "inference-prom"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(inference_jobs_outcome_total{outcome=\"server_error\"}[5m]))",
+          "legendFormat": "server_error_rps",
+          "range": true,
+          "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "inference-prom"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(inference_jobs_outcome_total{outcome=\"client_error\"}[5m]))",
+          "legendFormat": "client_error_rps",
+          "range": true,
+          "refId": "D"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "inference-prom"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(inference_jobs_outcome_total{outcome=\"exception\"}[5m]))",
+          "legendFormat": "exception_rps",
+          "range": true,
+          "refId": "E"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "inference-prom"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(inference_jobs_outcome_total{outcome=\"busy\"}[5m]))",
+          "legendFormat": "busy_rejects_rps",
+          "range": true,
+          "refId": "F"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "inference-prom"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(inference_jobs_outcome_total{outcome=\"queue_full\"}[5m]))",
+          "legendFormat": "queue_full_rps",
+          "range": true,
+          "refId": "G"
+        }
+      ],
+      "title": "Job Outcomes (rps)",
+      "type": "timeseries"
     }
   ],
   "refresh": "10s",
@@ -282,5 +653,5 @@
   "timezone": "",
   "title": "Inference Metrics",
   "uid": "inference-metrics",
-  "version": 1
+  "version": 2
 }

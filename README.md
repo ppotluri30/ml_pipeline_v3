@@ -19,7 +19,7 @@ Supporting services: MinIO (+ gateway fastapi-app), Kafka, Postgres-backed MLflo
 docker compose down
 
 # 1. Start core infrastructure
-docker compose up -d kafka minio postgres mlflow fastapi-app
+docker compose up -d kafka minio postgres mlflow fastapi-ap
 
 # 2. Run preprocessing (produces processed_data.parquet + test_processed_data.parquet)
 docker compose up -d preprocess

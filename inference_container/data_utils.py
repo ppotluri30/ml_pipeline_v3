@@ -2,9 +2,47 @@ import numpy as np # type: ignore
 import pandas as pd # type: ignore
 import io
 import os
-from typing import Optional, Any, List
+from typing import Optional, Any, List, Dict
 from sklearn.impute import KNNImputer # type: ignore
 from sklearn.preprocessing import MinMaxScaler, StandardScaler, RobustScaler, MaxAbsScaler # type: ignore
+
+
+def strip_timezones(df: Optional[pd.DataFrame]) -> tuple[Optional[pd.DataFrame], Dict[str, Any]]:
+    """Remove timezone information from datetime columns and index.
+
+    Returns the (possibly mutated) dataframe along with metadata describing what was adjusted.
+    """
+    info: Dict[str, Any] = {"index": False, "columns": []}
+    if df is None:
+        return df, info
+
+    # Handle datetime index with timezone
+    try:
+        if isinstance(df.index, pd.DatetimeIndex) and df.index.tz is not None:
+            try:
+                df.index = df.index.tz_convert(None)
+            except (TypeError, AttributeError, ValueError):
+                df.index = df.index.tz_localize(None)
+            info["index"] = True
+    except Exception:
+        pass
+
+    # Handle dataframe columns that are timezone-aware datetimes
+    adjusted_cols: List[str] = []
+    for col in df.columns:
+        try:
+            series = df[col]
+            if pd.api.types.is_datetime64tz_dtype(series):
+                try:
+                    df[col] = series.dt.tz_convert(None)
+                except (TypeError, AttributeError, ValueError):
+                    df[col] = series.dt.tz_localize(None)
+                adjusted_cols.append(col)
+        except Exception:
+            continue
+
+    info["columns"] = adjusted_cols
+    return df, info
 
 def read_data(file_input, filter: Optional[str] = None) -> pd.DataFrame:
     '''
