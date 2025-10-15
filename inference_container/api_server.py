@@ -121,6 +121,21 @@ DISABLE_INFERENCE_CACHE = os.getenv("DISABLE_INFERENCE_CACHE", "0").lower() in {
 _PREDICT_ALLOW_CACHED = os.getenv("PREDICT_ALLOW_CACHED", "1").lower() in {"1", "true", "yes"}
 
 
+def _read_busy_wait_timeout_ms() -> int:
+    default_ms = max(0, int(INFERENCE_TIMEOUT * 1000))
+    raw = os.getenv("PREDICT_BUSY_WAIT_TIMEOUT_MS")
+    if raw in {None, ""}:
+        return default_ms
+    try:
+        return max(0, int(float(raw)))
+    except (TypeError, ValueError):
+        return default_ms
+
+
+BUSY_WAIT_TIMEOUT_MS = _read_busy_wait_timeout_ms()
+BUSY_WAIT_INTERVAL_MS = max(1, int(os.getenv("PREDICT_BUSY_WAIT_INTERVAL_MS", "5")))
+
+
 def _cache_enabled() -> bool:
     return _PREDICT_ALLOW_CACHED and not DISABLE_INFERENCE_CACHE
 
@@ -596,23 +611,46 @@ async def _execute_inference(req: PredictRequest | None, inference_length_param:
         df = inf.df
 
     # Underlying busy guard (still allow cached) — primarily defensive if model sets busy flag internally
-    if getattr(inf, 'busy', False):
-        if _cache_enabled() and hasattr(inf, 'last_prediction_response') and inf.last_prediction_response:
-            cached = inf.last_prediction_response.copy()
-            cached["status"] = "SUCCESS_CACHED"
-            cached["cached"] = True
-            cached["req_id"] = req_id
-            queue_metrics["served_cached"] += 1
-            _queue_log("predict_served_cached_busy", req_id=req_id, served_cached=queue_metrics["served_cached"])
-            return cached
-        queue_metrics["rejected_busy"] += 1
-        _queue_log("predict_rejected_busy", req_id=req_id, rejected_busy=queue_metrics["rejected_busy"])
-        try:
-            if _PROMETHEUS_AVAILABLE:
-                JOB_OUTCOME.labels("busy").inc()
-        except Exception:
-            pass
-        raise HTTPException(status_code=429, detail="Inference busy, try again")
+    waited_ms = 0
+    if getattr(inf, "busy", False):
+        if BUSY_WAIT_TIMEOUT_MS > 0:
+            interval_s = BUSY_WAIT_INTERVAL_MS / 1000.0
+            max_wait_s = BUSY_WAIT_TIMEOUT_MS / 1000.0
+            start_wait = time.perf_counter()
+            logged_wait = False
+            while getattr(inf, "busy", False):
+                elapsed_s = time.perf_counter() - start_wait
+                if elapsed_s >= max_wait_s:
+                    break
+                if not logged_wait:
+                    _queue_log(
+                        "predict_busy_wait",
+                        req_id=req_id,
+                        timeout_ms=BUSY_WAIT_TIMEOUT_MS,
+                        interval_ms=BUSY_WAIT_INTERVAL_MS,
+                    )
+                    logged_wait = True
+                await asyncio.sleep(interval_s)
+            waited_ms = int((time.perf_counter() - start_wait) * 1000)
+            if not getattr(inf, "busy", False) and waited_ms > 0:
+                _queue_log("predict_busy_wait_cleared", req_id=req_id, waited_ms=waited_ms)
+        if getattr(inf, "busy", False):
+            if _cache_enabled() and hasattr(inf, "last_prediction_response") and inf.last_prediction_response:
+                cached = inf.last_prediction_response.copy()
+                cached["status"] = "SUCCESS_CACHED"
+                cached["cached"] = True
+                cached["req_id"] = req_id
+                queue_metrics["served_cached"] += 1
+                _queue_log("predict_served_cached_busy", req_id=req_id, served_cached=queue_metrics["served_cached"], waited_ms=waited_ms)
+                return cached
+            queue_metrics["rejected_busy"] += 1
+            _queue_log("predict_rejected_busy", req_id=req_id, rejected_busy=queue_metrics["rejected_busy"], waited_ms=waited_ms)
+            try:
+                if _PROMETHEUS_AVAILABLE:
+                    JOB_OUTCOME.labels("busy").inc()
+            except Exception:
+                pass
+            raise HTTPException(status_code=429, detail="Inference busy, try again")
 
     eff_len = inference_length_param if inference_length_param is not None else (req.inference_length if req and req.inference_length is not None else 1)
     if os.getenv("PREDICT_STUB", "0") in {"1", "true", "TRUE"}:

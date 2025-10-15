@@ -2,7 +2,11 @@ import os
 import time
 import queue
 import threading
+import asyncio
 from types import SimpleNamespace
+
+import pandas as pd
+import pytest
 
 # Minimal shim to import main components without starting runtime
 os.environ.setdefault("INFERENCE_AUTOSTART", "0")
@@ -42,7 +46,7 @@ if 'torch' not in sys.modules:
     tmod.device = device
     sys.modules['torch'] = tmod
 
-# Provide a minimal pandas stub with Series and Timedelta
+# Provide a minimal pandas stub only if the real package is unavailable
 if 'pandas' not in sys.modules:
     pdmod = types.ModuleType('pandas')
     class Series: pass
@@ -225,3 +229,59 @@ def test_microbatch_drain():
     t.start()
     time.sleep(0.1)
     assert q.qsize() == 0
+
+
+@pytest.mark.asyncio
+async def test_busy_wait_allows_pending_inference(monkeypatch):
+    from inference_container import api_server
+
+    class _DummyInferencer:
+        def __init__(self):
+            self.busy = True
+            self.current_model = object()
+            self.df = None
+            self.perform_calls = 0
+            self.current_run_id = "run123"
+            self.model_type = "GRU"
+            self.model_class = "pytorch"
+            self.last_prediction_response = {}
+
+        async def simulate_delay_if_enabled(self):  # pragma: no cover - simple stub
+            return
+
+        def perform_inference(self, df, inference_length=1):
+            self.perform_calls += 1
+            self.busy = True
+            result_index = pd.to_datetime(["2020-01-01T00:00:00Z"])
+            result = pd.DataFrame({"value": [42.0]}, index=result_index)
+            self.busy = False
+            return result
+
+    dummy_inf = _DummyInferencer()
+    api_server.BUSY_WAIT_TIMEOUT_MS = 200
+    api_server.BUSY_WAIT_INTERVAL_MS = 5
+    monkeypatch.setattr(api_server, "_get_inferencer", lambda: dummy_inf)
+
+    loop = asyncio.get_running_loop()
+    loop.call_later(0.01, setattr, dummy_inf, "busy", False)
+
+    request = api_server.PredictRequest(
+        inference_length=1,
+        index_col="time",
+        data={
+            "time": [
+                "2020-01-01T00:00:00Z",
+                "2020-01-01T00:01:00Z",
+                "2020-01-01T00:02:00Z",
+            ],
+            "value": [1.0, 2.0, 3.0],
+        },
+    )
+
+    try:
+        response = await api_server._execute_inference(request, None, "busy-wait-test")
+        assert response["status"] == "SUCCESS"
+        assert dummy_inf.perform_calls == 1
+    finally:
+        # Drain any pending callbacks to keep the loop clean
+        await asyncio.sleep(0)

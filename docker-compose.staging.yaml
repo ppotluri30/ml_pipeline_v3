@@ -12,7 +12,13 @@ services:
       UVICORN_KEEPALIVE: 30
       UVICORN_TIMEOUT_KEEP_ALIVE: 60
       UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN: 30
-      QUEUE_MAXSIZE: 40
+      # Cache disabled to force full inference on every request (temporary override)
+      DISABLE_INFERENCE_CACHE: "1"
+      PREDICT_ALLOW_CACHED: "0"
+      PREDICT_CACHE_ENABLED: "0"
+      # Increase worker concurrency for this trial
+      QUEUE_WORKERS: "6"
+      QUEUE_MAXSIZE: 10
       PAUSE_THRESHOLD_PCT: 80
       RESUME_THRESHOLD_PCT: 50
       # Optional Kafka consumer tunables (kept for completeness; not critical to HTTP load path)

@@ -296,7 +296,7 @@ services:
       - ENDPOINT_DOWNLOAD=http://fastapi-app:8000/download/processed-data/test_processed_data.parquet
       - ENDPOINT_DOWNLOAD_ALT=http://fastapi-app:8000/download/processed-data/processed_data.parquet
       - PREDICT_URL=http://inference:8000/predict
-      - PREDICT_WARMUP_DISABLE=0
+      - PREDICT_WARMUP_DISABLE=1
       - LOCUST_WAIT_FOR_MODEL=1
       - LOCUST_WAIT_FOR_MODEL_TIMEOUT=180
       - KAFKA_BURST=0
@@ -334,7 +334,7 @@ services:
       - ENDPOINT_DOWNLOAD=http://fastapi-app:8000/download/processed-data/test_processed_data.parquet
       - ENDPOINT_DOWNLOAD_ALT=http://fastapi-app:8000/download/processed-data/processed_data.parquet
       - PREDICT_URL=http://inference:8000/predict
-      - PREDICT_WARMUP_DISABLE=0
+      - PREDICT_WARMUP_DISABLE=1
       - KAFKA_BURST=0
       - KAFKA_BURST_COUNT=5000
       - KAFKA_BURST_TTL_MS=
@@ -381,8 +381,8 @@ services:
       - WAIT_FOR_MODEL=1
       - MODEL_WAIT_TIMEOUT=5
       - INFERENCE_PREWARM=1
-      - QUEUE_WORKERS=1
-      - QUEUE_MAXSIZE=40
+      - QUEUE_WORKERS=6
+      - QUEUE_MAXSIZE=10
       - INFERENCE_TIMEOUT=60
       - INFERENCE_START_IN_APP=1
       - SIMULATE_DELAY_SECS=0 # Default off; override locally only when testing artificial latency
