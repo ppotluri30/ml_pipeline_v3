@@ -185,6 +185,15 @@ commit_queues = {
     "promotion": queue.Queue(),
 }
 
+# Track the most recent promoted pointer so runtime decisions can restrict loads
+_PROMOTED_STATE = {
+    "run_id": None,
+    "model_uri": None,
+    "config_hash": None,
+    "model_type": None,
+    "experiment": None,
+}
+
 # --- Kafka Producer for Inference Output and DLQ ---
 producer = create_producer()
 dlq_topic = f"DLQ-{PRODUCER_TOPIC}"
@@ -295,34 +304,16 @@ def message_handler(service: Inferencer, message_queue: queue.Queue):
                     claim_check = message.value
                     operation = claim_check.get("operation")
                     status = claim_check.get("status")
+                    run_id = claim_check.get("run_id")
                     experiment = claim_check.get("experiment")
                     run_name = claim_check.get("run_name")
 
-                    run_inference_on_train = os.environ.get("RUN_INFERENCE_ON_TRAIN_SUCCESS", "1").lower() in {"1","true","yes"}
-                    allowed = {m.strip().upper() for m in os.environ.get("ALLOWED_INFERENCE_MODELS", "").split(',') if m.strip()}
-                    if operation and (status == "SUCCESS") and experiment and run_name:
-                        print(f"Inference worker attempting to load new model for experiment '{experiment}', run '{run_name}'.")
-                        # Capture config hash for enriched logging downstream
-                        try:
-                            service.current_config_hash = claim_check.get("config_hash")
-                        except Exception:
-                            service.current_config_hash = None
-                        service.load_model(experiment, run_name)
-                        # Only run inference if gating allows and model type is allowed (if list provided)
-                        if run_inference_on_train:
-                            model_type_upper = (service.model_type or service.current_run_name or "").upper()
-                            if (not allowed) or (model_type_upper in allowed):
-                                if service.df is not None:
-                                    service.perform_inference(service.df)
-                            else:
-                                print({
-                                    "service": "inference",
-                                    "event": "skip_model_type_not_allowed",
-                                    "model_type": model_type_upper,
-                                    "allowed": list(allowed)
-                                })
-                    else:
-                        print(f"Inference worker WARN: Training message received without complete details or success status: {claim_check}")
+                    if not (operation and status == "SUCCESS" and run_id):
+                        print({
+                            "service": "inference",
+                            "event": "training_claim_incomplete",
+                            "payload_keys": list(claim_check.keys()) if isinstance(claim_check, dict) else None
+                        })
                         publish_error(
                             service.producer,
                             service.dlq_topic,
@@ -331,6 +322,65 @@ def message_handler(service: Inferencer, message_queue: queue.Queue):
                             "Incomplete training claim check",
                             claim_check
                         )
+                        continue
+
+                    promoted_run_id = _PROMOTED_STATE.get("run_id")
+                    if promoted_run_id is None:
+                        print({
+                            "service": "inference",
+                            "event": "training_claim_refresh_promoted",
+                            "note": "Promotion state missing; attempting pointer reload"
+                        })
+                        _load_promoted_pointer(service)
+                        promoted_run_id = _PROMOTED_STATE.get("run_id")
+
+                    if promoted_run_id != run_id:
+                        print({
+                            "service": "inference",
+                            "event": "training_claim_skipped",
+                            "reason": "run_id_not_promoted",
+                            "run_id": run_id,
+                            "promoted_run_id": promoted_run_id
+                        })
+                        continue
+
+                    if service.current_model is None or getattr(service, "current_run_id", None) != run_id:
+                        print({
+                            "service": "inference",
+                            "event": "training_claim_promoted_reload",
+                            "run_id": run_id,
+                            "experiment": experiment,
+                            "run_name": run_name
+                        })
+                        _load_promoted_pointer(service)
+                        if getattr(service, "current_run_id", None) != run_id:
+                            print({
+                                "service": "inference",
+                                "event": "training_claim_reload_mismatch",
+                                "expected_run_id": run_id,
+                                "current_run_id": getattr(service, "current_run_id", None)
+                            })
+                    else:
+                        print({
+                            "service": "inference",
+                            "event": "training_claim_already_promoted",
+                            "run_id": run_id
+                        })
+
+                    run_inference_on_train = os.environ.get("RUN_INFERENCE_ON_TRAIN_SUCCESS", "1").lower() in {"1","true","yes"}
+                    allowed = {m.strip().upper() for m in os.environ.get("ALLOWED_INFERENCE_MODELS", "").split(',') if m.strip()}
+                    if run_inference_on_train and service.current_model is not None:
+                        model_type_upper = (service.model_type or service.current_run_name or "").upper()
+                        if (not allowed) or (model_type_upper in allowed):
+                            if service.df is not None:
+                                service.perform_inference(service.df)
+                        else:
+                            print({
+                                "service": "inference",
+                                "event": "skip_model_type_not_allowed",
+                                "model_type": model_type_upper,
+                                "allowed": list(allowed)
+                            })
                 elif source == "preprocessing":
                     claim_check = message.value
                     # Support both legacy and new claim shapes
@@ -415,6 +465,13 @@ def message_handler(service: Inferencer, message_queue: queue.Queue):
                                 # Mirror run name to model_type for downstream expectations
                                 service.current_run_name = service.model_type or normalized_type or ''
                                 service.current_experiment_name = claim_check.get("experiment", "Default")
+                                _PROMOTED_STATE.update({
+                                    "run_id": run_id,
+                                    "model_uri": cand,
+                                    "config_hash": claim_check.get("config_hash"),
+                                    "model_type": service.model_type,
+                                    "experiment": service.current_experiment_name,
+                                })
                                 print(f"✅ Promoted model loaded from {cand}")
                                 loaded = True
                                 break
@@ -644,6 +701,27 @@ def _load_promoted_pointer(service: Inferencer):
         print({"service": "inference", "event": "promotion_manifest_incomplete", "payload_keys": list(loaded_payload.keys())})
         return
 
+    _PROMOTED_STATE.update({
+        "run_id": run_id,
+        "model_uri": model_uri,
+        "config_hash": cfg_hash,
+        "model_type": model_type,
+        "experiment": experiment,
+    })
+    print({"service": "inference", "event": "promotion_state_cached", "run_id": run_id, "model_uri": model_uri})
+
+    # Avoid redundant reloads if we already have the promoted run active
+    if service.current_model is not None and getattr(service, "current_run_id", None) == run_id:
+        service.current_experiment_name = experiment
+        service.model_type = model_type or service.model_type
+        service.current_config_hash = cfg_hash or service.current_config_hash
+        print({
+            "service": "inference",
+            "event": "promotion_model_already_active",
+            "run_id": run_id
+        })
+        return
+
     from mlflow import pyfunc  # lazy import inside function
     uri_candidates = [model_uri]
     if not model_uri.rstrip('/').endswith('/model'):
@@ -713,6 +791,7 @@ def _start_runtime():
     def _consumer_loop(topic_name: str, source_name: str):
         consumer = create_consumer_configurable(topic_name, CONSUMER_GROUP_ID, enable_auto_commit=not USE_MANUAL_COMMIT)
         assigned = None
+        paused = False
         try:
             print({"service": "inference", "event": "consumer_loop_start", "topic": topic_name, "manual_commit": int(USE_MANUAL_COMMIT)})
             while True:
@@ -724,14 +803,16 @@ def _start_runtime():
                         pct = 100.0 * depth / cap
                         if pct >= PAUSE_THRESHOLD_PCT:
                             assigned = assigned or consumer.assignment()
-                            if assigned:
+                            if assigned and not paused:
                                 consumer.pause(*assigned)
                                 print({"service": "inference", "event": "consumer_paused", "topic": topic_name, "depth": depth, "pct": round(pct,2)})
+                                paused = True
                         elif pct <= RESUME_THRESHOLD_PCT:
                             assigned = assigned or consumer.assignment()
-                            if assigned:
+                            if assigned and paused:
                                 consumer.resume(*assigned)
                                 print({"service": "inference", "event": "consumer_resumed", "topic": topic_name, "depth": depth, "pct": round(pct,2)})
+                                paused = False
 
                 # Poll a batch
                 records = consumer.poll(timeout_ms=FETCH_MAX_WAIT_MS, max_records=MAX_POLL_RECORDS)

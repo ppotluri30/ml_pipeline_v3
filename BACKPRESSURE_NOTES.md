@@ -1,5 +1,25 @@
 # Backpressure & Load Validation Snapshot
 
+## Session snapshot — 2025-10-16
+
+- **Inference fixes now deployed**
+	- Rebuilt container after updating `inference_container/process_pool.py` so `InferenceHTTPError` is picklable and the executor always logs `process_pool_context_selected=spawn`.
+	- Disabled FastAPI predict cache via `ENABLE_PREDICT_CACHE=0` in `docker-compose.yaml`; service env still exports `DISABLE_INFERENCE_CACHE=1` for parity.
+	- Confirmed model pointer (`runs:/0f36e085d77441aca95e0d722f655d95`) loads with scaler auto-discovery; no further config tweaks required.
+- **Validation status**
+	- `payload-valid.json` (30 rows; satisfies `input_seq_len + output_seq_len`) → `POST /predict` returns 200 with predictions captured in `response.json`.
+	- `payload-invalid.json` (missing required columns) → `POST /predict` returns expected 400; body stored in `response-invalid.json`.
+	- Process pool remains healthy: log tail shows only `queue_job_enqueued/start/done`; no `queue_job_error` nor `BrokenProcessPool` after multiple requests.
+- **Testing progress**
+	- Health checks complete; ready to grab Prometheus snapshots (`inference_workers_busy`, queue depth, CPU) and launch headless Locust smoke next.
+	- Pending follow-up: run headless Locust scenario (reuse prior profile: 80 users, spawn 8, 60s) and capture metrics/summary; verify `/metrics` scrape post-run.
+- **Artifacts & references**
+	- Validation payloads: `payload-valid.json`, `payload-invalid.json`.
+	- Latest responses: `response.json`, `response-invalid.json`.
+	- Logs already inspected via `docker compose logs inference --tail 120` (clean) and metrics query `max_over_time(inference_workers_busy[30s])` (pending inclusion in summary once gathered).
+
+This section records the active state so the next session can continue with metrics capture and load validation without repeating setup.
+
 This note captures the validated staging configuration, a metrics snapshot for the inference service, and results from a short headless load test. Use it as a reference for future runs and tuning.
 
 ## Staging configuration (persisted)

@@ -662,6 +662,9 @@ class Inferencer:
         Storage layout: bucket=inference-logs (or INFERENCE_LOG_BUCKET env override), object key: {identifier}/{YYYYMMDD}/results.jsonl
         Append only: fetch existing object (if any), add one new line, re-upload.
         """
+        if os.getenv("INFERENCE_DISABLE_LOG_UPLOAD", "0") in {"1", "true", "TRUE"}:
+            return
+
         from datetime import datetime
         import json, math, hashlib
         from client_utils import get_file

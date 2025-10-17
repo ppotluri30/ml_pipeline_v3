@@ -1,0 +1,7 @@
+services:
+  inference:
+    environment:
+      QUEUE_WORKERS: "24"
+      QUEUE_MAXSIZE: "80"
+      INFERENCE_TIMEOUT: "120"
+      INFERENCE_DISABLE_LOG_UPLOAD: "1"
