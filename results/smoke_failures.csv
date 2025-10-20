@@ -1,0 +1,5 @@
+Method,Name,Error,Occurrences
+GET,predict_ping,HTTPError('404 Client Error: Not Found for url: predict_ping'),6
+POST,predict_warmup,HTTPError('404 Client Error: Not Found for url: predict_warmup'),6
+POST,predict_warmup,CatchResponseError('status=404'),183
+GET,predict_ping,CatchResponseError('status=404'),56

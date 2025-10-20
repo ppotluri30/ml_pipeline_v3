@@ -1,15 +1,13 @@
 apiVersion: v2
 name: flts
-description: A Helm chart for ML time series model training and inference with Superset frontend
+description: A Helm chart for ML time series model training and inference
 type: application
 version: 0.1.0
 appVersion: "1.0.0"
 keywords:
-  - druid
   - analytics
   - machine-learning
   - kafka
-  - superset
   - mlflow
 home: https://github.com/harp-wing/FLTS
 sources:
