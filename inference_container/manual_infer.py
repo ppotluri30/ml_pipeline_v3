@@ -1,7 +1,9 @@
 import os, io
 import pyarrow.parquet as pq
 from inferencer import Inferencer
-from kafka_utils import create_producer
+ENABLE_KAFKA = os.getenv("ENABLE_KAFKA", "0").lower() in {"1", "true", "yes"}
+if ENABLE_KAFKA:
+	from kafka_utils import create_producer
 from client_utils import get_file
 
 GATEWAY_URL = os.environ['GATEWAY_URL']
@@ -10,7 +12,8 @@ RUN_NAME = os.environ.get('MANUAL_RUN','GRU')
 IDENTIFIER = os.environ.get('IDENTIFIER','manualtest')
 
 print(f"[manual_infer] Starting manual inference for experiment={EXPERIMENT} run={RUN_NAME} identifier={IDENTIFIER}")
-producer = create_producer()
+print(f"[config] Kafka enabled: {ENABLE_KAFKA}")
+producer = create_producer() if ENABLE_KAFKA else None
 inf = Inferencer(GATEWAY_URL, producer, 'DLQ-performance-eval','performance-eval')
 inf.load_model(EXPERIMENT, RUN_NAME)
 

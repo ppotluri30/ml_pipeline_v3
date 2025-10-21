@@ -1,6 +1,23 @@
 from client_utils import post_file
 from data_utils import window_data, check_uniform, time_to_feature, subset_scaler
-from kafka_utils import produce_message, publish_error
+import os
+# Kafka enable/disable flag (guard Kafka usage across this module)
+ENABLE_KAFKA = os.getenv("ENABLE_KAFKA", "0").lower() in {"1", "true", "yes"}
+print(f"[config] Kafka enabled: {ENABLE_KAFKA}")
+
+# Import kafka helper functions only when Kafka is enabled. When disabled, define
+# no-op placeholders so existing code can call them safely but they'll be short-
+# circuited by checks (and will log warnings where a function is Kafka-only).
+if ENABLE_KAFKA:
+    from kafka_utils import produce_message, publish_error
+else:
+    def produce_message(producer, topic, value, key=None, headers=None):
+        print('[kafka-disabled] skipped produce_message()')
+
+    def publish_error(producer, dlq_topic, operation, status, error_details, payload=None):
+        print('[kafka-disabled] skipped publish_error()')
+# Import process-pool helpers for synchronous execution
+from inference_container.process_pool import submit_inference_job, InferenceHTTPError
 import numpy as np
 import pandas as pd
 import mlflow
@@ -233,14 +250,20 @@ class Inferencer:
 
         except Exception as e:
             print(f"Error loading model: {e}")
-            publish_error(
-                self.producer,
-                self.dlq_topic,
-                "Model Load",
-                "Failure",
-                str(e),
-                {"experiment": experiment_name, "run_name": run_name}
-            )
+            if ENABLE_KAFKA:
+                try:
+                    publish_error(
+                        self.producer,
+                        self.dlq_topic,
+                        "Model Load",
+                        "Failure",
+                        str(e),
+                        {"experiment": experiment_name, "run_name": run_name},
+                    )
+                except Exception as pe:  # pragma: no cover - best-effort reporting
+                    print(f"[kafka-disabled] publish_error failed: {pe}")
+            else:
+                print('[kafka-disabled] skipped publish_error() for model load')
 
     def _detect_model_type(self, run_row: pd.Series) -> Tuple[str, str]:
         """Detect [model_type, model_class] from MLflow run parameters or tags."""
@@ -376,6 +399,35 @@ class Inferencer:
             return df_transformed_predictions
         finally:
             self.busy = False
+
+    def run_inference(self, df_eval: Optional[pd.DataFrame] = None, inference_length: Optional[int] = None, timeout: Optional[int] = None):
+        """Submit inference work to the shared process pool and return the result synchronously.
+
+        This method avoids any internal queueing and provides a simple blocking API suitable for
+        calling from the HTTP server via asyncio.to_thread(). It builds a minimal payload and
+        uses submit_inference_job() which returns a concurrent.futures.Future.
+        """
+        payload = {
+            "prepared_df": df_eval,
+            "inference_length": inference_length,
+            "req_id": None,
+            "model_snapshot": None,
+        }
+        try:
+            future = submit_inference_job(payload)
+        except Exception as exc:  # pragma: no cover - pool not initialized or other
+            raise
+
+        try:
+            result = future.result(timeout=timeout)
+            # If worker returned wrapper with response/meta, extract
+            if isinstance(result, dict) and "response" in result:
+                return result.get("response")
+            return result
+        except InferenceHTTPError:
+            raise
+        except Exception:
+            raise
 
     def _perform_pytorch_inference(self, df_eval: pd.DataFrame, df_predictions: pd.DataFrame, local_inference_length: int) -> pd.DataFrame:
         """PyTorch inference logic"""

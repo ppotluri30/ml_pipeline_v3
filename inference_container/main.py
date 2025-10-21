@@ -195,7 +195,12 @@ _PROMOTED_STATE = {
 }
 
 # --- Kafka Producer for Inference Output and DLQ ---
-producer = create_producer()
+# Kafka enable/disable flag (guard Kafka usage across this module)
+ENABLE_KAFKA = os.getenv("ENABLE_KAFKA", "0").lower() in {"1", "true", "yes"}
+print(f"[config] Kafka enabled: {ENABLE_KAFKA}")
+
+# Only create a producer when Kafka is enabled. If disabled, keep producer=None
+producer = create_producer() if ENABLE_KAFKA else None
 dlq_topic = f"DLQ-{PRODUCER_TOPIC}"
 
 # --- Kafka Callback Functions Factory ---
@@ -314,14 +319,17 @@ def message_handler(service: Inferencer, message_queue: queue.Queue):
                             "event": "training_claim_incomplete",
                             "payload_keys": list(claim_check.keys()) if isinstance(claim_check, dict) else None
                         })
-                        publish_error(
-                            service.producer,
-                            service.dlq_topic,
-                            "Training Message Parse",
-                            "Failure",
-                            "Incomplete training claim check",
-                            claim_check
-                        )
+                        if ENABLE_KAFKA:
+                            publish_error(
+                                service.producer,
+                                service.dlq_topic,
+                                "Training Message Parse",
+                                "Failure",
+                                "Incomplete training claim check",
+                                claim_check,
+                            )
+                        else:
+                            print('[kafka-disabled] skipped publish_error() for training message parse')
                         continue
 
                     promoted_run_id = _PROMOTED_STATE.get("run_id")
@@ -411,14 +419,17 @@ def message_handler(service: Inferencer, message_queue: queue.Queue):
                         except Exception as e:
                             print(f"Inference worker error fetching, parsing, or during inference for {object_key}: {e}")
                             traceback.print_exc()
-                            publish_error(
-                                service.producer,
-                                service.dlq_topic,
-                                "Data Fetch/Inference",
-                                "Failure",
-                                str(e),
-                                {"bucket": bucket, "object_key": object_key}
-                            )
+                            if ENABLE_KAFKA:
+                                publish_error(
+                                    service.producer,
+                                    service.dlq_topic,
+                                    "Data Fetch/Inference",
+                                    "Failure",
+                                    str(e),
+                                    {"bucket": bucket, "object_key": object_key},
+                                )
+                            else:
+                                print('[kafka-disabled] skipped publish_error() for data fetch/inference')
                     else:
                         print(f"Inference worker WARN: Preprocessing message missing bucket/object fields: {claim_check}")
                         publish_error(
@@ -489,19 +500,28 @@ def message_handler(service: Inferencer, message_queue: queue.Queue):
                             service.perform_inference(service.df)
                         else:
                             print("Promotion message missing run_id/model_uri; sending to DLQ")
-                            publish_error(service.producer, service.dlq_topic, "Promotion Message Parse", "Failure", "Incomplete promotion message", claim_check)
+                            if ENABLE_KAFKA:
+                                publish_error(service.producer, service.dlq_topic, "Promotion Message Parse", "Failure", "Incomplete promotion message", claim_check)
+                            else:
+                                print('[kafka-disabled] skipped publish_error() for promotion message parse')
                     except Exception as e:
-                        publish_error(service.producer, service.dlq_topic, "Promotion Load", "Failure", str(e), claim_check)
+                        if ENABLE_KAFKA:
+                            publish_error(service.producer, service.dlq_topic, "Promotion Load", "Failure", str(e), claim_check)
+                        else:
+                            print('[kafka-disabled] skipped publish_error() for promotion load')
                 else:
                     print(f"Inference worker WARN: Unknown message source: {source}. Message: {message.value}")
-                    publish_error(
-                        service.producer,
-                        service.dlq_topic,
-                        "Unknown Message Source",
-                        "Failure",
-                        f"Message from unknown source '{source}'",
-                        message.value
-                    )
+                    if ENABLE_KAFKA:
+                        publish_error(
+                            service.producer,
+                            service.dlq_topic,
+                            "Unknown Message Source",
+                            "Failure",
+                            f"Message from unknown source '{source}'",
+                            message.value,
+                        )
+                    else:
+                        print('[kafka-disabled] skipped publish_error() for unknown message source')
 
                 # record processed offset
                 try:
@@ -516,14 +536,17 @@ def message_handler(service: Inferencer, message_queue: queue.Queue):
         except Exception as e:
             print(f"Inference worker failed to process message from queue: {e}")
             traceback.print_exc()
-            publish_error(
-                service.producer,
-                service.dlq_topic,
-                "Queue Processing",
-                "Failure",
-                str(e),
-                "No specific payload (queue error)"
-            )
+            if ENABLE_KAFKA:
+                publish_error(
+                    service.producer,
+                    service.dlq_topic,
+                    "Queue Processing",
+                    "Failure",
+                    str(e),
+                    "No specific payload (queue error)",
+                )
+            else:
+                print('[kafka-disabled] skipped publish_error() for queue processing')
         finally:
             # Mark all drained items as done
             try:
