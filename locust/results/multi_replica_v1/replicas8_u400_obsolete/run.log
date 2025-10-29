@@ -1,0 +1,10 @@
+[2025-10-28 19:10:25,063] a614abc7a152/INFO/locust.main: Starting Locust 2.41.5
+[2025-10-28 19:10:25,512] a614abc7a152/INFO/locust.runners: d5bffc2f1e63_f0a902a3f6624225a0b8280c831f8443 (index 0) reported as ready. 1 workers connected.
+[2025-10-28 19:10:25,971] a614abc7a152/INFO/locust.runners: 2299b0e58c82_9fa185e31ed04a7382e29ccade55a281 (index 1) reported as ready. 2 workers connected.
+[2025-10-28 19:10:26,090] a614abc7a152/INFO/locust.main: Run time limit set to 120 seconds
+[2025-10-28 19:10:26,091] a614abc7a152/INFO/locust.runners: Sending spawn jobs of 400 users at 60.00 spawn rate to 2 ready workers
+[2025-10-28 19:10:26,552] a614abc7a152/INFO/locust.runners: 1fc4bf9f6181_615855b8a9f046409a8d5e489e950712 (index 2) reported as ready. 3 workers connected.
+[2025-10-28 19:10:27,058] a614abc7a152/INFO/locust.runners: b77e3908f388_a8138a8f690c48cc9cbc2dda5a3bf980 (index 3) reported as ready. 4 workers connected.
+[2025-10-28 19:10:34,846] a614abc7a152/INFO/locust.runners: All users spawned: {"PipelineUser": 400} (400 total users)
+[2025-10-28 19:12:26,085] a614abc7a152/INFO/locust.main: --run-time limit reached, shutting down
+[2025-10-28 19:12:27,090] a614abc7a152/INFO/locust.main: Shutting down (exit code 1)

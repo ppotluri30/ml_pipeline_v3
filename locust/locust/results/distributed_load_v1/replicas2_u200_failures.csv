@@ -1,0 +1,4 @@
+Method,Name,Error,Occurrences
+POST,predict,HTTPError('503 Server Error: Service Unavailable for url: predict'),1
+GET,healthz,HTTPError('503 Server Error: Service Unavailable for url: healthz'),1
+POST,predict,HTTPError('500 Server Error: Internal Server Error for url: predict'),3901

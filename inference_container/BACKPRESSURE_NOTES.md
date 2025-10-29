@@ -1,5 +1,7 @@
 # Inference Backpressure Validation Notes
 
+> **Update (2025-01-05):** The inference service no longer uses a local queue or process pool. The notes below are retained for historical reference when bounded-queue mode was active; they do not reflect the current synchronous inference path.
+
 Date: 2025-10-09
 Scope: HTTP /predict bounded-queue behavior under Locust load; quick log scan for backpressure signals. Kafka-consumer backpressure not exercised in this run.
 

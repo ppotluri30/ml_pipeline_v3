@@ -1,0 +1,9 @@
+CONTAINER ID   NAME                    CPU %     MEM USAGE / LIMIT     MEM %     NET I/O          BLOCK I/O         PIDS
+de4ada002c35   flts-main-inference-1   146.08%   889.8MiB / 13.48GiB   6.45%     158MB / 23.9MB   15.3MB / 161MB    873
+cc2c053f9cab   flts-main-inference-2   114.59%   361MiB / 13.48GiB     2.61%     71.7MB / 696kB   229kB / 69.6MB    88
+77100292f15b   flts-main-inference-3   109.74%   360.9MiB / 13.48GiB   2.61%     71.7MB / 698kB   1.69MB / 69.6MB   79
+9940e56a22c5   flts-main-inference-4   140.01%   379.9MiB / 13.48GiB   2.75%     71.7MB / 700kB   3.39MB / 69.6MB   96
+87536e8e55ae   flts-main-inference-5   139.33%   366MiB / 13.48GiB     2.65%     71.7MB / 687kB   90.1kB / 69.6MB   89
+904620aa48e8   flts-main-inference-6   141.09%   364.5MiB / 13.48GiB   2.64%     71.7MB / 700kB   0B / 69.6MB       89
+fd68075e5e6c   flts-main-inference-7   115.72%   362.4MiB / 13.48GiB   2.62%     71.7MB / 703kB   0B / 69.6MB       90
+f51f9d7d30ba   flts-main-inference-8   95.06%    362.6MiB / 13.48GiB   2.63%     71.7MB / 697kB   12.3kB / 69.6MB   88

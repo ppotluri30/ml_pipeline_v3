@@ -1,0 +1,24 @@
+[2025-10-28 18:13:51,247] fac5d3f9fb9b/INFO/locust.main: Starting Locust 2.41.5
+[2025-10-28 18:13:51,395] fac5d3f9fb9b/INFO/locust.runners: cdf57e1fbaad_c282f4afcbb041beab47fea3682e53bc (index 0) reported as ready. 1 workers connected.
+[2025-10-28 18:13:51,396] fac5d3f9fb9b/INFO/locust.runners: cdf57e1fbaad_c282f4afcbb041beab47fea3682e53bc (index 0) reported as ready. 1 workers connected.
+[2025-10-28 18:13:51,396] fac5d3f9fb9b/INFO/locust.runners: cdf57e1fbaad_c282f4afcbb041beab47fea3682e53bc (index 0) reported as ready. 1 workers connected.
+[2025-10-28 18:13:54,619] fac5d3f9fb9b/INFO/locust.runners: 0603f6bdcbd6_58448a1893d543aabb3b41651009ef78 (index 1) reported as ready. 2 workers connected.
+[2025-10-28 18:13:54,623] fac5d3f9fb9b/INFO/locust.runners: 0603f6bdcbd6_58448a1893d543aabb3b41651009ef78 (index 1) reported as ready. 2 workers connected.
+[2025-10-28 18:13:54,624] fac5d3f9fb9b/INFO/locust.runners: 0603f6bdcbd6_58448a1893d543aabb3b41651009ef78 (index 1) reported as ready. 2 workers connected.
+[2025-10-28 18:13:54,845] fac5d3f9fb9b/INFO/locust.runners: 2d4078360e31_f9616b5dbaee4b6bb8650afb52d09337 (index 2) reported as ready. 3 workers connected.
+[2025-10-28 18:13:54,846] fac5d3f9fb9b/INFO/locust.runners: 2d4078360e31_f9616b5dbaee4b6bb8650afb52d09337 (index 2) reported as ready. 3 workers connected.
+[2025-10-28 18:13:54,846] fac5d3f9fb9b/INFO/locust.runners: 2d4078360e31_f9616b5dbaee4b6bb8650afb52d09337 (index 2) reported as ready. 3 workers connected.
+[2025-10-28 18:13:54,847] fac5d3f9fb9b/INFO/locust.runners: 2d4078360e31_f9616b5dbaee4b6bb8650afb52d09337 (index 2) reported as ready. 3 workers connected.
+[2025-10-28 18:13:54,847] fac5d3f9fb9b/INFO/locust.runners: 2d4078360e31_f9616b5dbaee4b6bb8650afb52d09337 (index 2) reported as ready. 3 workers connected.
+[2025-10-28 18:13:54,885] fac5d3f9fb9b/INFO/locust.runners: 3bbfa085cd39_5a79fcc2cf37433587dc9c74c160679d (index 3) reported as ready. 4 workers connected.
+[2025-10-28 18:13:54,885] fac5d3f9fb9b/INFO/locust.runners: 3bbfa085cd39_5a79fcc2cf37433587dc9c74c160679d (index 3) reported as ready. 4 workers connected.
+[2025-10-28 18:13:55,268] fac5d3f9fb9b/INFO/locust.main: Run time limit set to 120 seconds
+[2025-10-28 18:13:55,271] fac5d3f9fb9b/INFO/locust.runners: Sending spawn jobs of 200 users at 40.00 spawn rate to 4 ready workers
+[2025-10-28 18:14:02,119] fac5d3f9fb9b/INFO/locust.runners: All users spawned: {"PipelineUser": 200} (200 total users)
+[2025-10-28 18:15:55,263] fac5d3f9fb9b/INFO/locust.main: --run-time limit reached, shutting down
+[2025-10-28 18:15:55,376] fac5d3f9fb9b/INFO/locust.runners: Worker '2d4078360e31_f9616b5dbaee4b6bb8650afb52d09337' (index 2) quit. 0 workers ready.
+[2025-10-28 18:15:55,377] fac5d3f9fb9b/INFO/locust.runners: Worker '3bbfa085cd39_5a79fcc2cf37433587dc9c74c160679d' (index 3) quit. 0 workers ready.
+[2025-10-28 18:15:55,427] fac5d3f9fb9b/INFO/locust.runners: Worker 'cdf57e1fbaad_c282f4afcbb041beab47fea3682e53bc' (index 0) quit. 0 workers ready.
+[2025-10-28 18:15:55,444] fac5d3f9fb9b/INFO/locust.runners: Worker '0603f6bdcbd6_58448a1893d543aabb3b41651009ef78' (index 1) quit. 0 workers ready.
+[2025-10-28 18:15:55,445] fac5d3f9fb9b/INFO/locust.runners: The last worker quit, stopping test.
+[2025-10-28 18:15:56,270] fac5d3f9fb9b/INFO/locust.main: Shutting down (exit code 0)

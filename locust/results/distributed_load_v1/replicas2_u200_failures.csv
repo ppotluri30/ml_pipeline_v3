@@ -1,0 +1,6 @@
+Method,Name,Error,Occurrences
+GET,download_processed,"gaierror(-3, 'Temporary failure in name resolution')",1
+POST,predict,HTTPError('503 Server Error: Service Unavailable for url: predict'),12
+GET,healthz,HTTPError('503 Server Error: Service Unavailable for url: healthz'),2
+GET,healthz,RemoteDisconnected('Remote end closed connection without response'),1
+POST,predict,RemoteDisconnected('Remote end closed connection without response'),7

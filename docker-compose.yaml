@@ -134,10 +134,10 @@ services:
       - CONFIG_PATH=/app/config.json
       - IDENTIFIER=${IDENTIFIER}
       - DATASET_NAME=PobleSec
-      - SAMPLE_TRAIN_ROWS=51
-      - SAMPLE_TEST_ROWS=31
-      - SAMPLE_STRATEGY=head
-      - SAMPLE_SEED=45
+      - SAMPLE_TRAIN_ROWS=
+      - SAMPLE_TEST_ROWS=
+      - SAMPLE_STRATEGY=
+      - SAMPLE_SEED=
       - FORCE_REPROCESS=1
       - EXTRA_HASH_SALT=forceInfer1
     depends_on:
@@ -221,9 +221,9 @@ services:
       - TRAIN_TEST_SPLIT=0.8
       - INPUT_SEQ_LEN=10
       - OUTPUT_SEQ_LEN=1
-      - HIDDEN_SIZE=512
-      - NUM_LAYERS=6
-      - BATCH_SIZE=256
+      - HIDDEN_SIZE=128
+      - NUM_LAYERS=2
+      - BATCH_SIZE=64
       - EPOCHS=10
       - EARLY_STOPPING=True
       - PATIENCE=30
@@ -262,9 +262,9 @@ services:
       - TRAIN_TEST_SPLIT=0.8
       - INPUT_SEQ_LEN=10
       - OUTPUT_SEQ_LEN=1
-      - HIDDEN_SIZE=512
-      - NUM_LAYERS=6
-      - BATCH_SIZE=256
+      - HIDDEN_SIZE=128
+      - NUM_LAYERS=2
+      - BATCH_SIZE=64
       - EPOCHS=10
       - EARLY_STOPPING=True
       - PATIENCE=30
@@ -285,7 +285,7 @@ services:
         condition: service_started
       kafka:
         condition: service_healthy
-      inference:
+      inference-lb:
         condition: service_healthy
     working_dir: /mnt/locust
     volumes:
@@ -293,29 +293,34 @@ services:
     environment:
       - LOCUST_TRUNCATE_LOG=1
       - GATEWAY_BASE=http://fastapi-app:8000
-      - ENDPOINT_DOWNLOAD=http://fastapi-app:8000/download/processed-data/test_processed_data.parquet
-      - ENDPOINT_DOWNLOAD_ALT=http://fastapi-app:8000/download/processed-data/processed_data.parquet
-      - PREDICT_URL=http://inference:8000/predict
+      - ENDPOINT_DOWNLOAD=http://fastapi-app:8000/download/model-promotion/current.json
+      - ENDPOINT_DOWNLOAD_ALT=http://fastapi-app:8000/download/model-promotion/current.json
+      - DOWNLOAD_WARMUP_ATTEMPTS=1
+      - PREDICT_URL=http://inference-lb/predict
       - PREDICT_WARMUP_DISABLE=1
-      - LOCUST_WAIT_FOR_MODEL=1
+      - LOCUST_WAIT_FOR_MODEL=0
       - LOCUST_WAIT_FOR_MODEL_TIMEOUT=180
+      - LOCUST_PREFLIGHT_DISABLE=1
       - KAFKA_BURST=0
       - KAFKA_BURST_COUNT=5000
       - KAFKA_BURST_TTL_MS=
       - KAFKA_BURST_KEY_PREFIX=
       - LOCUST_MODE=ui
-      - TARGET_HOST=http://inference:8000
+      - TARGET_HOST=http://inference-lb
       - LOCUST_ENABLE_PREDICT_CACHE=0
       - PREDICT_PAYLOAD_MODE=synthetic
+      - LOCUST_CLI_ARGS=${LOCUST_CLI_ARGS:-}
+    entrypoint: /bin/sh
     command:
-      - -f
-      - /mnt/locust/locustfile.py
-      - --host
-      - http://inference:8000
-      - --web-host
-      - 0.0.0.0
-      - --web-port
-      - "8089"
+      - -c
+      - |
+        locust -f /mnt/locust/locustfile.py \
+          --master \
+          --master-bind-host 0.0.0.0 \
+          --master-bind-port 5557 \
+          --web-host 0.0.0.0 \
+          --web-port 8089 \
+          ${LOCUST_CLI_ARGS}
     ports:
       - "8089:8089"
       - "5557:5557"
@@ -333,26 +338,30 @@ services:
       # Mirror master env so worker tasks use the same endpoints/behavior
       - LOCUST_TRUNCATE_LOG=1
       - GATEWAY_BASE=http://fastapi-app:8000
-      - ENDPOINT_DOWNLOAD=http://fastapi-app:8000/download/processed-data/test_processed_data.parquet
-      - ENDPOINT_DOWNLOAD_ALT=http://fastapi-app:8000/download/processed-data/processed_data.parquet
-      - PREDICT_URL=http://inference:8000/predict
-      - PREDICT_WARMUP_DISABLE=1
+      - ENDPOINT_DOWNLOAD=http://fastapi-app:8000/download/model-promotion/current.json
+      - ENDPOINT_DOWNLOAD_ALT=http://fastapi-app:8000/download/model-promotion/current.json
+      - DOWNLOAD_WARMUP_ATTEMPTS=1
       - KAFKA_BURST=0
       - KAFKA_BURST_COUNT=5000
       - KAFKA_BURST_TTL_MS=
       - KAFKA_BURST_KEY_PREFIX=
       - LOCUST_ENABLE_PREDICT_CACHE=0
       - PREDICT_PAYLOAD_MODE=synthetic
+      - PREDICT_URL=http://inference-lb/predict
+      - PREDICT_WARMUP_DISABLE=1
+      - LOCUST_WAIT_FOR_MODEL=0
+      - LOCUST_PREFLIGHT_DISABLE=1
     volumes:
       - ./locust:/mnt/locust
-    command: ["-f", "/mnt/locust/locustfile.py", "--worker", "--master-host", "locust"]
+    command: ["-f", "/mnt/locust/locustfile.py", "--worker", "--master-host", "locust", "--master-port", "5557"]
     networks:
       - app-network
 
   inference:
     build: ./inference_container
-    ports:
-      - "8023:8000"
+    expose:
+      - "8000"
+      - "9091"
     depends_on:
       kafka:
         condition: service_healthy
@@ -405,6 +414,7 @@ services:
       # Test-only: expose publish API and tune uvicorn keepalive during load tests
       - ENABLE_PUBLISH_API=1
       - UVICORN_KEEPALIVE=30
+      - PREDICT_MAX_CONCURRENCY=64
     # Ensure the service binds to 0.0.0.0 inside the container so other containers can reach it
     # Use the package/module name `api_server:app` (this matches the project layout and Dockerfile CMD)
     command: ["sh", "-c", "exec uvicorn api_server:app --host 0.0.0.0 --port 8000 --log-level debug --access-log"]
@@ -417,6 +427,24 @@ services:
       timeout: 3s
       retries: 40
     # Druid coordinator host mapping removed
+
+  inference-lb:
+    image: haproxy:2.9-alpine
+    depends_on:
+      inference:
+        condition: service_started
+    volumes:
+      - ./monitoring/inference-lb/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    ports:
+      - "8023:80"
+    networks:
+      - common
+      - app-network
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/healthz >/dev/null 2>&1 || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
   prometheus:
     image: prom/prometheus:latest

@@ -1,3 +1,7 @@
+import pytest
+
+pytest.skip("Legacy queue-based tests retained for history; see test_sync_predict.py for current coverage.", allow_module_level=True)
+
 import asyncio
 import concurrent.futures
 import os
@@ -8,23 +12,11 @@ import time
 import pandas as pd
 import pytest
 from fastapi import HTTPException
+from fastapi.testclient import TestClient
 
-# Minimal shim to import main components without starting runtime
-os.environ.setdefault("INFERENCE_AUTOSTART", "0")
-os.environ.setdefault("USE_BOUNDED_QUEUE", "1")
-os.environ.setdefault("QUEUE_MAXSIZE", "32")
-os.environ.setdefault("ENABLE_MICROBATCH", "1")
-os.environ.setdefault("BATCH_SIZE", "8")
-os.environ.setdefault("BATCH_TIMEOUT_MS", "5")
+from inference_container import api_server
 
-# Required envs for import
-os.environ.setdefault("GATEWAY_URL", "http://localhost:8000")
-os.environ.setdefault("CONSUMER_TOPIC_0", "inference-data")
-os.environ.setdefault("CONSUMER_TOPIC_1", "model-training")
-os.environ.setdefault("PROMOTION_TOPIC", "model-selected")
-os.environ.setdefault("CONSUMER_GROUP_ID", "test-group")
-os.environ.setdefault("PRODUCER_TOPIC", "performance-eval")
-os.environ.setdefault("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
+client = TestClient(api_server.app)
 
 TIME_FEATURE_COLUMNS = {
     "min_of_day_sin",
@@ -315,59 +307,6 @@ def test_run_inference_job_missing_columns_returns_400(monkeypatch):
     assert excinfo.value.worker_id == os.getpid()
 
 
-def test_bounded_queue_and_backpressure():
-    q = main.message_queue
-    _drain(q)
-    # Simulate enqueue via callback factory
-    cb = main._kafka_callback_factory(main.inferencer, "preprocessing", q)
-
-    # Enqueue more than QUEUE_MAXSIZE
-    total = int(os.getenv("QUEUE_MAXSIZE")) * 3
-    dropped = 0
-    for i in range(total):
-        try:
-            cb(DummyMessage(key=f"k{i}", value={"bucket":"b","object":"o"}))
-        except queue.Full:
-            dropped += 1
-
-    # Queue should not exceed maxsize
-    assert q.qsize() <= int(os.getenv("QUEUE_MAXSIZE"))
-
-
-def test_ttl_expiry():
-    os.environ["ENABLE_TTL"] = "1"
-    q = main.message_queue
-    _drain(q)
-    cb = main._kafka_callback_factory(main.inferencer, "preprocessing", q)
-
-    expired = int(time.time()*1000) - 100
-    cb(DummyMessage(key="expired", value={"bucket":"b","object":"o"}, headers=[(b'deadline_ms', str(expired).encode())]))
-
-    # Start worker for a brief moment to drain
-    t = threading.Thread(target=main.message_handler, args=(main.inferencer, q), daemon=True)
-    t.start()
-    time.sleep(0.05)
-    assert q.qsize() == 0
-
-
-def test_microbatch_drain():
-    os.environ["ENABLE_MICROBATCH"] = "1"
-    os.environ["BATCH_SIZE"] = "4"
-    os.environ["BATCH_TIMEOUT_MS"] = "10"
-
-    q = main.message_queue
-    _drain(q)
-    # Use training messages with incomplete details so worker won't try data fetch/model load
-    cb = main._kafka_callback_factory(main.inferencer, "training", q)
-    for i in range(7):
-        cb(DummyMessage(key=f"k{i}", value={"operation":"","status":""}))
-
-    t = threading.Thread(target=main.message_handler, args=(main.inferencer, q), daemon=True)
-    t.start()
-    time.sleep(0.1)
-    assert q.qsize() == 0
-
-
 @pytest.mark.asyncio
 async def test_predict_invalid_payload_returns_400_without_submitting(monkeypatch):
     from inference_container import api_server
@@ -582,3 +521,35 @@ async def test_predict_queue_full_returns_429(monkeypatch):
     assert excinfo.value.status_code == 429
     assert api_server.queue_metrics["rejected_full"] == 1
     assert called is False
+
+
+def test_metrics_reports_synchronous_mode(monkeypatch):
+    inferencer = DummyInferencer()
+    monkeypatch.setattr(api_server, "_get_inferencer", lambda: inferencer)
+
+    response = client.get("/metrics")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["mode"] == "synchronous"
+    assert body["workers"] == 1
+
+
+class DummyInferencer:
+    def __init__(self, df: pd.DataFrame | None = None, expected_columns: list[str] | None = None):
+        self.df = df
+        self.current_model = object()
+        self.current_run_id = "run123"
+        self.current_model_uri = "runs:/run123/model"
+        self.current_config_hash = "cfg123"
+        self.model_type = "dummy"
+        self.expected_feature_columns = expected_columns or ["value", "up"]
+        self.last_prediction_response = None
+
+    async def simulate_delay_if_enabled(self):  # pragma: no cover - optional behaviour
+        return None
+
+    def perform_inference(self, df: pd.DataFrame, inference_length: int | None = None) -> pd.DataFrame:
+        rows = int(inference_length or max(1, len(df)))
+        index = pd.date_range("2024-01-01", periods=rows, freq="1min")
+        return pd.DataFrame({"value": [float(i) for i in range(rows)]}, index=index)

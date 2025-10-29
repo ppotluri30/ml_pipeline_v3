@@ -1,0 +1,3 @@
+[2025-10-21 11:50:41,644] C-PF5S5VKT/INFO/locust.main: Starting Locust 2.42.0
+[2025-10-21 11:51:41,934] C-PF5S5VKT/INFO/locust.runners: Got quit message from master, shutting down...
+[2025-10-21 11:51:42,266] C-PF5S5VKT/INFO/locust.main: Shutting down (exit code 0)

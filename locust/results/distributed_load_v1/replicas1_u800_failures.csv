@@ -1,0 +1,6 @@
+Method,Name,Error,Occurrences
+GET,healthz-warm,HTTPError('504 Server Error: Gateway Time-out for url: healthz-warm'),359
+POST,predict,HTTPError('503 Server Error: Service Unavailable for url: predict'),5580
+GET,healthz,HTTPError('503 Server Error: Service Unavailable for url: healthz'),702
+POST,predict,HTTPError('429 Client Error: Too Many Requests for url: predict'),303
+POST,predict,HTTPError('504 Server Error: Gateway Time-out for url: predict'),80

@@ -1,0 +1,5 @@
+Method,Name,Error,Occurrences
+POST,predict,HTTPError('503 Server Error: Service Unavailable for url: predict'),2
+POST,predict,HTTPError('429 Client Error: Too Many Requests for url: predict'),253
+GET,healthz,RemoteDisconnected('Remote end closed connection without response'),1
+POST,predict,RemoteDisconnected('Remote end closed connection without response'),2

@@ -1,42 +1,49 @@
+
 ## FLTS AI Agent Guide (Concise, Actionable)
 
-- **Architecture first**: Claim-check pipeline across `preprocess_container` → `train_container` (GRU/LSTM/Prophet) → `eval_container` → `inference_container`, stitched together by Kafka topics and MinIO via the FastAPI gateway (`/download`, `/upload`). Read `README.md` for the end-to-end picture.
-- **Essential code tour**:
-	- `preprocess_container/main.py` – `build_active_config()` hashing, parquet metadata stamps, idempotent short-circuit.
-	- `train_container/main.py` – bucket bootstrap, `_train_parquet` target fabrication, MLflow artifact layout (model folder named `MODEL_TYPE`, scaler under `scaler/*.pkl`).
-	- `eval_container/main.py` – waits for `EXPECTED_MODEL_TYPES`, scores with `0.5*rmse+0.3*mae+0.2*mse`, writes promotion pointers.
-	- `inference_container/main.py` + `inferencer.py` – queue orchestration, pointer resolution order (`current.json` → `global/current.json` → `<identifier>/current.json`), scaler discovery, dedupe.
-	- `locust/locustfile.py` – HTTP load harness, Kafka burst seeding knobs.
-- **Claim-check contract**:
-	- Preprocess emits `{bucket, object_key, config_hash, identifier}` to `training-data` (+ optional `inference-data`).
-	- Trainers publish `model-training` events (`SUCCESS` only after logging artifacts) including `run_id`, `experiment`, `config_hash`.
-	- Eval posts promotion payloads with `model_uri`, `score`, then updates `model-promotion/<identifier|global>/<config_hash>/current.json` before broadcasting `model-selected`.
-- **Config hash & dedup rules**:
-	- `build_active_config()` folds env toggles, `_data` payload, and optional `EXTRA_HASH_SALT`; the hash is embedded into parquet metadata (`preprocess_config`, `config_hash`) and `.meta.json` claim files.
-	- Idempotency: matching hash skips recompute unless `FORCE_REPROCESS=1`. Trainers guard duplicates via `(MODEL_TYPE, config_hash)` cache (`SKIP_DUPLICATE_CONFIGS`, `DUP_CACHE_MAX`).
-- **Training nuances**:
-	- `_ensure_buckets()` must align with inference env for `INFERENCE_LOG_BUCKET`; mismatches silently break inference uploads.
-	- `_train_parquet` fabricates missing `value` column, drops raw originals, repairs duplicate columns → avoids `feature_count_mismatch`.
-	- MLflow runs expect scaler artifacts; missing scaler trips inference load errors (`scaler_not_found`).
-- **Evaluation & promotion**:
-	- Retries MLflow search (`PROMOTION_SEARCH_RETRIES`, `PROMOTION_SEARCH_DELAY_SEC`); Prophet can be metrics-only.
-	- Promotion history JSON lives under `model-promotion/<identifier|global>/<config_hash>/promotion-*.json`; keep pointer JSON schema stable (`model_uri`, `model_type`, `config_hash`, etc.).
-- **Inference runtime & backpressure**:
-	- `_ensure_buckets()` mirrors training; uses env flags `USE_BOUNDED_QUEUE`, `QUEUE_MAXSIZE`, `ENABLE_MICROBATCH`, `ENABLE_TTL`, `USE_MANUAL_COMMIT` (see `docker-compose.staging.yaml`).
-	- `process_pool.py` enforces `spawn` context so `InferenceHTTPError` stays picklable; broken pools usually surface as missing `queue_job_*` logs.
-	- Cache controls: set `ENABLE_PREDICT_CACHE=0` (`docker-compose.yaml`) while `DISABLE_INFERENCE_CACHE=1` remains for parity.
-	- Consult `BACKPRESSURE_NOTES.md` for validated env combos, Locust warm-up toggles (`PREDICT_WARMUP_DISABLE`), and metrics sidecar tips.
-- **Verification workflows**:
-	- Fast loop once images built: `docker compose up -d kafka minio postgres mlflow fastapi-app preprocess train_gru train_lstm nonml_prophet eval inference`; optionally force new lineage with `$env:EXTRA_HASH_SALT="dev$(Get-Random)"`.
-	- Single-service smoke: `docker compose up -d inference`; HTTP surface at `/predict`, `/metrics`, `/scale_workers` (`inference_container/api_server.py`).
-	- Load smoke: `docker compose run --rm -e LOCUST_HOST=http://inference:8000 locust -f /mnt/locust/locustfile.py --headless -u 40 -r 4 -t 20s`; stage-specific headless presets documented in `locust/` CSVs and notes.
-- **Testing & diagnostics**:
-	- `pytest inference_container/tests/test_backpressure.py` covers bounded queue TTL + microbatch flow; install deps via `pip install -r inference_container/requirements.txt`.
-	- Readiness endpoints: preprocess `/readyz` (dataset fetch), eval `/readyz` (Kafka + MLflow), inference logs `queue_enqueued` for queue depth; Prometheus scrape at `http://inference:8000/metrics`.
-- **Observability hooks**:
-	- Key structured log keys (`skip_idempotent`, `train_success_publish`, `promotion_scoreboard`, `promotion_artifacts_ok`, `queue_enqueued`, `predict_inference_start`) drive dashboards—avoid renaming.
-	- Autoscaling via POST `/scale_workers` (PowerShell: `curl.exe -X POST http://localhost:8000/scale_workers -H "Content-Type: application/json" -d '{"workers":4}'`); watch backpressure counters before/after.
-- **Extending model families**:
-	- Add trainer branch in `_build_model`, mirror compose service with unique `CONSUMER_GROUP_ID`, append to `EXPECTED_MODEL_TYPES`, ensure promotion pointer schema still resolves, and wire inference fast-path (`RUN_INFERENCE_ON_TRAIN_SUCCESS`) once artifacts confirmed.
+Purpose: get an AI coding agent productive quickly — architecture, contracts, dev workflows, and repo-specific conventions.
 
-Update this brief when bucket names, promotion schemas, or backpressure conventions shift so future agents can land running.
+- Architecture snapshot: claim-check ML pipeline: `preprocess_container` → `train_container` (GRU/LSTM/Prophet) → `eval_container` → `inference_container`. Components talk via Kafka topics and MinIO; a FastAPI gateway exposes `/download`, `/upload`, `/predict`, `/metrics`.
+
+- Quick code tour (key files):
+	- `preprocess_container/main.py` — `build_active_config()` (config-hash), parquet metadata stamps, idempotent short-circuit.
+	- `train_container/main.py` — `_train_parquet` targets, MLflow artifact layout: model folder named by `MODEL_TYPE`, scaler under `scaler/*.pkl`.
+	- `eval_container/main.py` — waits for `EXPECTED_MODEL_TYPES`, computes composite score (weights in code), writes promotion pointer JSONs.
+	- `inference_container/main.py`, `inferencer.py` — pointer resolution (`current.json` → `global/current.json` → `<identifier>/current.json`), scaler discovery and loading, de-dup logic.
+	- `locust/locustfile.py` — load harness and Kafka seeding knobs.
+
+- Claim-check contract (concrete):
+	- Preprocess emits claim messages to `training-data` with {bucket, object_key, config_hash, identifier}. Some flows also publish `inference-data`.
+	- Trainers publish `model-training` events (only `SUCCESS` after artifacts logged) including `run_id`, `experiment`, `config_hash`.
+	- Eval publishes promotion payloads (`model_uri`, `score`) and writes pointers under `model-promotion/<identifier|global>/<config_hash>/current.json` before broadcasting `model-selected`.
+
+- Important runtime and config conventions:
+	- Config hash: `build_active_config()` folds env toggles, `_data` payload, and optional `EXTRA_HASH_SALT`. Hash is embedded in parquet metadata and `.meta.json` claim files.
+	- Idempotency: matching config hash skips processing unless `FORCE_REPROCESS=1`.
+	- Duplicate-train guard: trainers use a `(MODEL_TYPE, config_hash)` cache controlled by `SKIP_DUPLICATE_CONFIGS` and `DUP_CACHE_MAX`.
+	- Buckets must be consistent: `_ensure_buckets()` must align training and inference `INFERENCE_LOG_BUCKET` or inference uploads fail silently.
+	- MLflow expectation: scaler artifact under `scaler/*.pkl` — missing scaler causes `scaler_not_found` at inference load time.
+
+- How to run locally (fast checks):
+	- Full fast loop (images prebuilt):
+		docker compose up -d kafka minio postgres mlflow fastapi-app preprocess train_gru train_lstm nonml_prophet eval inference
+	- Single-service smoke for inference: `docker compose up -d inference` — health and endpoints at `/predict`, `/metrics`, `/scale_workers` (see `inference_container/api_server.py`).
+	- Load smoke (example): `docker compose run --rm -e LOCUST_HOST=http://inference:8000 locust -f /mnt/locust/locustfile.py --headless -u 40 -r 4 -t 20s`.
+
+- Tests and diagnostics:
+	- Unit/smoke test: `pytest inference_container/tests/test_backpressure.py` exercises predict path and backpressure/cache behavior. Install deps: `pip install -r inference_container/requirements.txt`.
+	- Readiness endpoints: preprocess `/readyz`, eval `/readyz`. Prometheus metrics: `http://inference:8000/metrics`.
+
+- Observability & keys to avoid renaming:
+	- Structured log keys used by dashboards: `skip_idempotent`, `train_success_publish`, `promotion_scoreboard`, `promotion_artifacts_ok`, `queue_enqueued`, `predict_inference_start`.
+
+- Common pitfalls (callouts):
+	- Missing scaler in MLflow artifacts → inference load errors.
+	- Mismatched bucket names between training and inference → silent upload failures.
+	- Promotion pointer JSON schema changes break pointer resolution; paths: `model-promotion/<identifier|global>/<config_hash>/promotion-*.json` and `current.json`.
+
+- Quick heuristics for code edits:
+	- When adding a trainer, update `EXPECTED_MODEL_TYPES`, add a compose service with a unique `CONSUMER_GROUP_ID`, and ensure eval promotion pointers remain resolvable.
+	- When changing the config-hash logic, update parquet metadata writing in `preprocess_container/main.py` and tests that expect idempotency.
+
+Update this file if bucket names, promotion schemas, or backpressure conventions change. For other details, see `README.md`, `BACKPRESSURE_NOTES.md`, and container `main.py` files referenced above.

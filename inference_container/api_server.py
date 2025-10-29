@@ -1,13 +1,14 @@
-"""FastAPI inference API fronting a process pool for bounded parallel inference."""
+"""FastAPI inference API serving synchronous inference requests."""
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
+import math
 import os
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
@@ -16,28 +17,7 @@ from pydantic import BaseModel, Field
 
 from data_utils import strip_timezones, time_to_feature
 
-try:  # Prefer package-style import when available (local tests)
-    from inference_container.process_pool import (
-        InferenceHTTPError,
-        build_job_payload,
-        ensure_process_pool,
-        pending_jobs,
-        release_slot,
-        reinitialize_process_pool,
-        submit_inference_job,
-        try_acquire_slot,
-    )
-except ModuleNotFoundError:  # Fallback for in-container execution
-    from process_pool import (  # type: ignore
-        InferenceHTTPError,
-        build_job_payload,
-        ensure_process_pool,
-        pending_jobs,
-        release_slot,
-        reinitialize_process_pool,
-        submit_inference_job,
-        try_acquire_slot,
-    )
+InferenceHTTPError = None  # Backwards compatibility shim; local pool deprecated
 
 # Prometheus metrics (optional dependency)
 try:
@@ -106,15 +86,23 @@ def _env_flag(name: str, default: bool = False) -> bool:
     return raw.lower() in {"1", "true", "yes"}
 
 
-POOL_SCALE_MIN = int(os.getenv("POOL_SCALE_MIN", "1"))
-POOL_SCALE_MAX = int(os.getenv("POOL_SCALE_MAX", "64"))
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return int(str(raw).strip())
+    except (TypeError, ValueError):
+        return default
 
-# Worker and queue sizing defaults
-DEFAULT_QUEUE_WORKERS = int(os.getenv("QUEUE_WORKERS", "4"))
-QUEUE_WORKERS = max(POOL_SCALE_MIN, min(POOL_SCALE_MAX, DEFAULT_QUEUE_WORKERS))
-QUEUE_MAXSIZE = max(1, int(os.getenv("QUEUE_MAXSIZE", "32")))
-INFERENCE_TIMEOUT = float(os.getenv("INFERENCE_TIMEOUT", "30"))
-QUEUE_MONITOR_INTERVAL_SECS = float(os.getenv("QUEUE_MONITOR_INTERVAL_SECS", "0.5"))
+
+# Legacy compatibility knobs (no longer used for concurrency now that inference is synchronous)
+_DEFAULT_CONCURRENCY = max(1, os.cpu_count() or 1)
+PREDICT_MAX_CONCURRENCY = max(1, _env_int("PREDICT_MAX_CONCURRENCY", _DEFAULT_CONCURRENCY))
+_DEFAULT_THREADPOOL = max(PREDICT_MAX_CONCURRENCY, _DEFAULT_CONCURRENCY)
+PREDICT_THREADPOOL_WORKERS = max(1, _env_int("PREDICT_THREADPOOL_WORKERS", _DEFAULT_THREADPOOL))
+QUEUE_WORKERS = PREDICT_MAX_CONCURRENCY
+QUEUE_MAXSIZE = 1
 
 # Startup / readiness behaviour
 WAIT_FOR_MODEL = _env_flag("WAIT_FOR_MODEL", True)
@@ -166,30 +154,17 @@ app = FastAPI(title="Inference Synchronous API")
 
 @app.post("/scale_workers")
 async def scale_workers(payload: dict = Body(...)):
-    global QUEUE_WORKERS
-    try:
-        desired = int(payload.get("workers", 0))
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid 'workers' value")
-    if desired < POOL_SCALE_MIN or desired > POOL_SCALE_MAX:
-        raise HTTPException(
-            status_code=400,
-            detail=f"workers must be between {POOL_SCALE_MIN} and {POOL_SCALE_MAX}",
-        )
-
-    old = QUEUE_WORKERS
-    if desired == old:
-        return {"old_workers": old, "new_workers": desired, "status": "no_change"}
-
-    QUEUE_WORKERS = desired
-    reinitialize_process_pool(desired, QUEUE_MAXSIZE, _current_model_snapshot())
-    _refresh_prometheus_metrics()
-    _queue_log("queue_workers_scaled", old=old, new=desired, reason="manual_process_pool")
-    print(
-        f"Reinitialized process pool from {old} -> {desired} workers (manual request via /scale_workers)",
-        flush=True,
+    """Legacy endpoint retained for compatibility. Pool-based scaling is deprecated."""
+    _queue_log(
+        "scale_workers_deprecated",
+        requested_workers=payload.get("workers"),
+        note="Local process pool removed; adjust concurrency via external clients",
     )
-    return {"old_workers": old, "new_workers": desired, "status": "pool_reinitialized"}
+    return {
+        "status": "deprecated",
+        "message": "Local pool queue deprecated — concurrency now managed by distributed Locust workers.",
+        "workers": PREDICT_MAX_CONCURRENCY,
+    }
 ENABLE_PUBLISH_API = os.getenv("ENABLE_PUBLISH_API", "0").lower() in {"1", "true", "yes"}
 _publish_producer = None  # lazy-init if endpoint used
 _publish_topic = os.getenv("PUBLISH_TOPIC", os.getenv("CONSUMER_TOPIC_0", "inference-data"))
@@ -201,25 +176,66 @@ _startup_ready_ms: float | None = None
 _pool_started = False
 _queue_monitor_task: asyncio.Task | None = None
 _queue_monitor_stop_event: asyncio.Event | None = None
+_event_loop_monitor_task: asyncio.Task | None = None
+
+_CONCURRENCY_SEMAPHORE: asyncio.Semaphore | None = None
+_concurrency_semaphore_lock = threading.Lock()
+
+_threadpool_executor: ThreadPoolExecutor | None = None
+_threadpool_executor_lock = threading.Lock()
 
 queue_metrics = {
     "enqueued": 0,
-    "rejected_full": 0,
-    "rejected_busy": 0,
     "active": 0,
     "completed": 0,
-    "timeouts": 0,
     "served_cached": 0,
-    # wait time accounting
-    "total_wait_ms": 0,
-    "wait_samples": 0,
-    "last_wait_ms": 0,
     "last_duration_ms": 0,
-    "last_worker_id": None,
+    "last_wait_ms": 0,
+    "max_wait_ms": 0,
+    "max_exec_ms": 0,
+    "total_wait_ms": 0.0,
+    "wait_samples": 0,
+    "total_exec_ms": 0.0,
+    "exec_samples": 0,
+    "last_prep_ms": 0,
+    "max_prep_ms": 0,
+    "total_prep_ms": 0.0,
+    "prep_samples": 0,
     # error metrics
     "error_500_total": 0,
     "last_error_type": None,
 }
+
+queue_metrics_lock = threading.Lock()
+
+event_loop_stats = {
+    "samples": 0,
+    "total_ms": 0.0,
+    "max_ms": 0.0,
+    "last_ms": 0.0,
+}
+
+event_loop_stats_lock = threading.Lock()
+
+
+def _get_concurrency_semaphore() -> asyncio.Semaphore:
+    global _CONCURRENCY_SEMAPHORE
+    if _CONCURRENCY_SEMAPHORE is None:
+        with _concurrency_semaphore_lock:
+            if _CONCURRENCY_SEMAPHORE is None:
+                _CONCURRENCY_SEMAPHORE = asyncio.Semaphore(PREDICT_MAX_CONCURRENCY)
+    return _CONCURRENCY_SEMAPHORE
+
+def _get_threadpool_executor() -> ThreadPoolExecutor:
+    global _threadpool_executor
+    if _threadpool_executor is None:
+        with _threadpool_executor_lock:
+            if _threadpool_executor is None:
+                _threadpool_executor = ThreadPoolExecutor(
+                    max_workers=PREDICT_THREADPOOL_WORKERS,
+                    thread_name_prefix="predict-exec",
+                )
+    return _threadpool_executor
 
 # (Removed rolling inference duration tracking in rollback)
 
@@ -347,76 +363,15 @@ def _queue_log(event: str, **extra):  # central helper for structured logs
 
 
 def _safe_queue_size() -> int:
-    try:
-        return pending_jobs()
-    except Exception:
-        return 0
+    return 0
 
 
 async def _start_queue_monitor():
-    global _queue_monitor_task, _queue_monitor_stop_event
-    if not _PROMETHEUS_AVAILABLE:
-        return
-    if _queue_monitor_task and not _queue_monitor_task.done():
-        return
-    stop_event = asyncio.Event()
-    _queue_monitor_stop_event = stop_event
-
-    async def _monitor_loop():
-        _queue_log("queue_monitor_started", interval=QUEUE_MONITOR_INTERVAL_SECS)
-        try:
-            while not stop_event.is_set():
-                try:
-                    qsize = _safe_queue_size()
-                    QUEUE_LEN.set(qsize)
-                    QUEUE_OLDEST_WAIT.set(0.0)
-                except Exception:
-                    pass
-                try:
-                    await asyncio.wait_for(stop_event.wait(), timeout=QUEUE_MONITOR_INTERVAL_SECS)
-                except asyncio.TimeoutError:
-                    continue
-        finally:
-            try:
-                qsize = _safe_queue_size()
-                QUEUE_LEN.set(qsize)
-                QUEUE_OLDEST_WAIT.set(0.0)
-            except Exception:
-                pass
-            _queue_log("queue_monitor_stopped")
-
-    _queue_monitor_task = asyncio.create_task(_monitor_loop())
+    _queue_log("queue_monitor_disabled")
 
 
 async def _stop_queue_monitor():
-    global _queue_monitor_task, _queue_monitor_stop_event
-    if _queue_monitor_stop_event:
-        _queue_monitor_stop_event.set()
-    task = _queue_monitor_task
-    if task:
-        try:
-            await asyncio.wait_for(task, timeout=2.0)
-        except asyncio.TimeoutError:
-            task.cancel()
-            with contextlib.suppress(Exception):
-                await task
-        finally:
-            _queue_monitor_task = None
-            _queue_monitor_stop_event = None
-    else:
-        _queue_monitor_stop_event = None
-
-def _request_to_dict(req: PredictRequest | None) -> Optional[Dict[str, Any]]:
-    if req is None:
-        return None
-    if hasattr(req, "model_dump"):
-        return req.model_dump()  # type: ignore[attr-defined]
-    if hasattr(req, "dict"):
-        return req.dict()
-    try:
-        return json.loads(req.json())
-    except Exception:
-        return None
+    return
 
 
 TIME_FEATURE_COLUMNS = {
@@ -427,6 +382,39 @@ TIME_FEATURE_COLUMNS = {
     "day_of_year_sin",
     "day_of_year_cos",
 }
+
+
+async def _monitor_event_loop_lag(interval: float = 0.5) -> None:
+    """Track event-loop lag via periodic probes."""
+    loop = asyncio.get_running_loop()
+    expected = loop.time() + interval
+    try:
+        while True:
+            await asyncio.sleep(interval)
+            now = loop.time()
+            lag = max(0.0, now - expected)
+            expected = now + interval
+            lag_ms = lag * 1000.0
+            with event_loop_stats_lock:
+                event_loop_stats["samples"] += 1
+                event_loop_stats["total_ms"] += lag_ms
+                event_loop_stats["last_ms"] = lag_ms
+                if lag_ms > event_loop_stats["max_ms"]:
+                    event_loop_stats["max_ms"] = lag_ms
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # pragma: no cover - best-effort telemetry
+        _queue_log("event_loop_monitor_error", error=str(exc))
+
+
+def _ensure_event_loop_monitor_started() -> None:
+    global _event_loop_monitor_task
+    if _event_loop_monitor_task is not None and not _event_loop_monitor_task.done():
+        return
+    try:
+        _event_loop_monitor_task = asyncio.create_task(_monitor_event_loop_lag())
+    except Exception:
+        _queue_log("event_loop_monitor_start_failed")
 
 
 def _expected_feature_columns(service: Any | None) -> set[str]:
@@ -443,14 +431,33 @@ def _expected_feature_columns(service: Any | None) -> set[str]:
         extra = getattr(service, "expected_feature_columns", None)
         if extra:
             try:
-                columns.update(list(extra))
+                columns.update(set(extra))
             except Exception:
                 pass
     return {col for col in columns if col not in TIME_FEATURE_COLUMNS}
 
 
-def _prepare_dataframe_for_inference(req_obj: PredictRequest, service: Any | None) -> tuple[pd.DataFrame, List[str]]:
-    """Validate the inbound payload and produce a feature-engineered DataFrame.
+def _format_missing_columns_error(exc: KeyError) -> str:
+    raw = exc.args[0] if exc.args else ""
+    if isinstance(raw, str):
+        start = raw.find("[")
+        end = raw.find("]", start + 1)
+        if start != -1 and end != -1 and end > start:
+            cols_fragment = raw[start + 1 : end]
+            columns = [col.strip().strip("'\"") for col in cols_fragment.split(",") if col.strip()]
+            if columns:
+                return ", ".join(columns)
+        cleaned = raw.replace("not found in axis", "").strip(" ' ")
+        if cleaned:
+            return cleaned
+    return str(exc)
+
+
+def _prepare_dataframe_for_inference(
+    req_obj: PredictRequest,
+    service: Any | None,
+) -> tuple[pd.DataFrame, List[str]]:
+    """Normalize inbound request payload into a dataframe suitable for inference.
 
     Returns the prepared dataframe plus the list of required base feature columns enforced.
     Raises HTTPException(400) for validation failures so the caller can short-circuit.
@@ -539,34 +546,37 @@ def _current_model_snapshot() -> Dict[str, Any]:
     return snapshot
 
 
-def _refresh_prometheus_metrics(active_now: Optional[int] = None, duration_s: Optional[float] = None, wait_seconds: Optional[float] = None) -> None:
+def _refresh_prometheus_metrics(duration_s: Optional[float] = None) -> None:
     if not _PROMETHEUS_AVAILABLE:
         return
     try:
-        if active_now is None:
+        with queue_metrics_lock:
             active_now = max(0, queue_metrics.get("active", 0))
-        WORKERS_TOTAL.set(QUEUE_WORKERS)
-        ACTIVE_WORKERS.set(active_now)
-        WORKERS_BUSY.set(active_now)
-        WORKERS_IDLE.set(max(0, QUEUE_WORKERS - active_now))
-        if QUEUE_WORKERS:
-            WORKER_UTILIZATION.set(min(1.0, active_now / QUEUE_WORKERS))
-        qsize = pending_jobs()
-        QUEUE_LEN.set(qsize)
-        if wait_seconds is not None:
-            QUEUE_WAIT_LATEST.set(wait_seconds)
-            QUEUE_WAIT_TIME.observe(wait_seconds)
+        total_workers = max(1, PREDICT_MAX_CONCURRENCY)
+        busy_workers = min(active_now, total_workers)
+        idle_workers = max(0, total_workers - busy_workers)
+        WORKERS_TOTAL.set(total_workers)
+        ACTIVE_WORKERS.set(busy_workers)
+        WORKERS_BUSY.set(busy_workers)
+        WORKERS_IDLE.set(idle_workers)
+        WORKER_UTILIZATION.set((busy_workers / total_workers) if total_workers else 0.0)
+        QUEUE_LEN.set(0)
+        QUEUE_WAIT_LATEST.set(0.0)
+        QUEUE_OLDEST_WAIT.set(0.0)
         if duration_s is not None:
             INFERENCE_LATENCY.observe(max(0.0, duration_s))
             INFERENCE_DURATION_LATEST.set(max(0.0, duration_s))
+        try:
+            inf = _get_inferencer()
+            MODEL_READY.set(1 if getattr(inf, "current_model", None) is not None else 0)
+        except Exception:
+            MODEL_READY.set(0)
     except Exception:
         pass
 
 
 def _ensure_process_pool_ready(snapshot: Dict[str, Any]) -> None:
-    global _pool_started
-    ensure_process_pool(QUEUE_WORKERS, QUEUE_MAXSIZE, snapshot)
-    _pool_started = True
+    _queue_log("process_pool_disabled", snapshot_requested=bool(snapshot))
     _refresh_prometheus_metrics()
 
 # --- Middleware to log ALL requests early (captures 422 JSON errors) ---
@@ -653,11 +663,13 @@ async def _prewarm_if_needed():  # pragma: no cover (performance side-effect)
 def predict_ping():
     try:
         inf = _get_inferencer()
+        active_jobs = getattr(inf, "active_inference_jobs", 0)
         return {
             "status": "ok",
             "model_loaded": inf.current_model is not None,
             "has_df": inf.df is not None,
-            "busy": getattr(inf, "busy", False),
+            "busy": active_jobs > 0,
+            "active_jobs": active_jobs,
             "input_seq_len": getattr(inf, "input_seq_len", None),
             "output_seq_len": getattr(inf, "output_seq_len", None),
         }
@@ -673,29 +685,42 @@ def metrics():
     except Exception:
         pass
     build_version = os.getenv("INFER_VERSION")
-    qsize = _safe_queue_size()
-    avg_wait = None
-    if queue_metrics["wait_samples"]:
-        avg_wait = queue_metrics["total_wait_ms"] / max(1, queue_metrics["wait_samples"])
+    with queue_metrics_lock:
+        qm_snapshot = queue_metrics.copy()
+    with event_loop_stats_lock:
+        loop_snapshot = event_loop_stats.copy()
+    avg_wait_ms = qm_snapshot["total_wait_ms"] / qm_snapshot["wait_samples"] if qm_snapshot["wait_samples"] else 0.0
+    avg_exec_ms = qm_snapshot["total_exec_ms"] / qm_snapshot["exec_samples"] if qm_snapshot["exec_samples"] else 0.0
+    avg_prep_ms = qm_snapshot["total_prep_ms"] / qm_snapshot["prep_samples"] if qm_snapshot["prep_samples"] else 0.0
+    loop_avg_ms = loop_snapshot["total_ms"] / loop_snapshot["samples"] if loop_snapshot["samples"] else 0.0
     return {
-        "queue_length": qsize,
-        "workers": QUEUE_WORKERS,
-        "completed": queue_metrics["completed"],
-        "rejected": queue_metrics["rejected_full"] + queue_metrics["rejected_busy"],
-        "timeouts": queue_metrics["timeouts"],
-        "error_500_total": queue_metrics["error_500_total"],
-        "last_error_type": queue_metrics["last_error_type"],
+        "mode": "synchronous",
+        "queue_length": 0,
+        "workers": PREDICT_MAX_CONCURRENCY,
+        "active": qm_snapshot["active"],
+        "active_jobs": getattr(inf, "active_inference_jobs", None) if inf else None,
+        "completed": qm_snapshot["completed"],
+        "error_500_total": qm_snapshot["error_500_total"],
+        "last_error_type": qm_snapshot["last_error_type"],
         "model_loaded": bool(getattr(inf, "current_model", None)) if inf else False,
         "current_model_hash": getattr(inf, "current_config_hash", None) if inf else None,
         "current_run_id": getattr(inf, "current_run_id", None) if inf else None,
         "current_model_type": getattr(inf, "model_type", None) if inf else None,
         "startup_latency_ms": _startup_ready_ms,
         "prewarm_latency_ms": getattr(inf, "last_prewarm_ms", None) if inf else None,
-        "average_queue_wait_ms": avg_wait,
-        "last_queue_wait_ms": queue_metrics["last_wait_ms"],
-        "last_inference_duration_ms": queue_metrics["last_duration_ms"],
-        "served_cached": queue_metrics["served_cached"],
-        "max_queue": QUEUE_MAXSIZE,
+        "last_inference_duration_ms": qm_snapshot["last_duration_ms"],
+        "last_wait_ms": qm_snapshot["last_wait_ms"],
+        "max_wait_ms": qm_snapshot["max_wait_ms"],
+        "avg_wait_ms": round(avg_wait_ms, 2),
+        "max_exec_ms": qm_snapshot["max_exec_ms"],
+        "avg_exec_ms": round(avg_exec_ms, 2),
+    "last_prep_ms": qm_snapshot["last_prep_ms"],
+    "max_prep_ms": qm_snapshot["max_prep_ms"],
+    "avg_prep_ms": round(avg_prep_ms, 2),
+        "served_cached": qm_snapshot["served_cached"],
+        "event_loop_lag_last_ms": round(loop_snapshot["last_ms"], 3),
+        "event_loop_lag_max_ms": round(loop_snapshot["max_ms"], 3),
+        "event_loop_lag_avg_ms": round(loop_avg_ms, 3),
         "build_version": build_version,
         "status": "ok",
     }
@@ -730,33 +755,38 @@ async def predict(
     inference_length: int | None = Query(default=None, ge=1, le=10000),
 ):
     req_id = uuid.uuid4().hex[:8]
-    # Serve cached response instantly for empty {} request if available (no new job enqueued)
+    wait_ms: Optional[float] = None
     try:
-        if _cache_enabled() and ((req is None) or ((not getattr(req, 'data', None)) and inference_length is None and getattr(req, 'inference_length', None) is None)):
+        if _cache_enabled() and ((req is None) or ((not getattr(req, "data", None)) and inference_length is None and getattr(req, "inference_length", None) is None)):
             inf_cached = _get_inferencer()
-            if hasattr(inf_cached, 'last_prediction_response') and getattr(inf_cached, 'last_prediction_response'):
-                cached = getattr(inf_cached, 'last_prediction_response').copy()
+            last_response = getattr(inf_cached, "last_prediction_response", None)
+            if last_response:
+                cached = last_response.copy()
                 cached["status"] = "SUCCESS_CACHED"
                 cached["cached"] = True
                 cached["req_id"] = req_id
-                queue_metrics["served_cached"] += 1
-                _queue_log("predict_served_cached_direct", req_id=req_id, served_cached=queue_metrics["served_cached"])
+                with queue_metrics_lock:
+                    queue_metrics["served_cached"] += 1
+                    served_cached = queue_metrics["served_cached"]
+                _queue_log("predict_served_cached_direct", req_id=req_id, served_cached=served_cached)
                 return cached
     except Exception:
-        # Silent failover to normal path
         pass
+
     if os.getenv("PREDICT_FORCE_OK", "0") in {"1", "true", "TRUE"}:
         _queue_log("predict_force_ok", req_id=req_id)
         return {"status": "SUCCESS", "identifier": os.getenv("IDENTIFIER") or "default", "run_id": None, "predictions": []}
 
-    prepared_df = None
-    required_base_columns: List[str] = []
-    if req is not None and getattr(req, "data", None):
+    service: Any | None = None
+    try:
+        service = _get_inferencer()
+    except Exception:
         service = None
-        try:
-            service = _get_inferencer()
-        except Exception:
-            service = None
+
+    prepared_df: Optional[pd.DataFrame] = None
+    required_base_columns: List[str] = []
+    prep_start = time.perf_counter()
+    if req is not None and getattr(req, "data", None):
         try:
             prepared_df, required_base_columns = _prepare_dataframe_for_inference(req, service)
         except HTTPException:
@@ -764,196 +794,207 @@ async def predict(
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(status_code=400, detail=f"Failed to parse provided data: {exc}") from exc
 
-    snapshot = _current_model_snapshot()
-    _ensure_process_pool_ready(snapshot)
-
-    if not try_acquire_slot():
-        queue_metrics["rejected_full"] += 1
-        _queue_log("queue_job_rejected_full", req_id=req_id, rejected=queue_metrics["rejected_full"], qsize=_safe_queue_size())
-        if _PROMETHEUS_AVAILABLE:
-            try:
-                JOB_OUTCOME.labels("queue_full").inc()
-            except Exception:
-                pass
-        raise HTTPException(status_code=429, detail="Server busy, try again", headers={"Retry-After": "0.1"})
-
     body_inference_length = getattr(req, "inference_length", None) if req else None
     effective_inference_length = inference_length if inference_length is not None else body_inference_length
+    if effective_inference_length is None:
+        effective_inference_length = 1
 
-    enqueue_time = time.time()
-    queue_metrics["enqueued"] += 1
-    queue_metrics["last_wait_ms"] = 0
-    queue_metrics["wait_samples"] += 1
-    payload = build_job_payload(
-        prepared_df,
-        effective_inference_length,
-        req_id,
-        snapshot,
-        expected_base_columns=required_base_columns,
+    df_for_inference = prepared_df
+    if df_for_inference is None:
+        if service is None or getattr(service, "df", None) is None:
+            raise HTTPException(status_code=400, detail="No cached dataframe available and no data provided")
+        df_for_inference = service.df
+
+    if required_base_columns:
+        missing_base = [col for col in required_base_columns if col not in df_for_inference.columns]
+        if missing_base:
+            raise HTTPException(status_code=400, detail=f"Missing required feature columns: {', '.join(sorted(missing_base))}")
+
+    prep_duration_ms = (time.perf_counter() - prep_start) * 1000.0
+    prep_ms_int = int(prep_duration_ms)
+    with queue_metrics_lock:
+        queue_metrics["prep_samples"] += 1
+        queue_metrics["total_prep_ms"] += prep_duration_ms
+        queue_metrics["last_prep_ms"] = prep_ms_int
+        if prep_ms_int > queue_metrics["max_prep_ms"]:
+            queue_metrics["max_prep_ms"] = prep_ms_int
+
+    with queue_metrics_lock:
+        queue_metrics["enqueued"] += 1
+
+    semaphore = _get_concurrency_semaphore()
+    wait_started = time.perf_counter()
+    await semaphore.acquire()
+    wait_ms = (time.perf_counter() - wait_started) * 1000.0
+    with queue_metrics_lock:
+        queue_metrics["active"] += 1
+        queue_metrics["wait_samples"] += 1
+        queue_metrics["total_wait_ms"] += wait_ms
+        wait_ms_int = int(wait_ms)
+        queue_metrics["last_wait_ms"] = wait_ms_int
+        if wait_ms_int > queue_metrics["max_wait_ms"]:
+            queue_metrics["max_wait_ms"] = wait_ms_int
+        active_now = queue_metrics["active"]
+    _queue_log(
+        "predict_inline_start",
+        req_id=req_id,
+        rows=len(df_for_inference.index) if isinstance(df_for_inference, pd.DataFrame) else None,
+        inference_length=int(effective_inference_length or 0),
+        active_workers=active_now,
+        concurrency_limit=PREDICT_MAX_CONCURRENCY,
+        wait_ms=wait_ms_int,
+        prep_ms=prep_ms_int,
     )
-    payload["queue_workers"] = QUEUE_WORKERS
-    _queue_log("queue_job_enqueued", req_id=req_id, qsize=_safe_queue_size(), enqueued=queue_metrics["enqueued"], active=queue_metrics["active"])
 
     try:
-        future = submit_inference_job(payload)
-    except Exception as exc:  # noqa: BLE001
-        release_slot()
-        queue_metrics["rejected_full"] += 1
-        queue_metrics["last_error_type"] = exc.__class__.__name__
-        _queue_log("queue_job_submit_error", req_id=req_id, error=str(exc))
-        raise HTTPException(status_code=500, detail="Internal inference error")
-
-    queue_metrics["active"] += 1
-    queue_metrics["last_worker_id"] = None
-    _refresh_prometheus_metrics(active_now=queue_metrics["active"], wait_seconds=0.0)
-    _queue_log("queue_job_start", req_id=req_id, active=queue_metrics["active"], qsize=_safe_queue_size(), waited_ms=0)
+        maybe_delay = getattr(service, "simulate_delay_if_enabled", None)
+        if callable(maybe_delay):
+            await maybe_delay()
+    except Exception:
+        pass
 
     start_exec = time.time()
-    wrapped_future = asyncio.wrap_future(future)
+    duration_s: Optional[float] = None
+    duration_ms: int = 0
+    result_df: Optional[pd.DataFrame] = None
     try:
-        worker_payload = await asyncio.wait_for(wrapped_future, timeout=INFERENCE_TIMEOUT)
-        end_time = time.time()
-        duration_s = end_time - start_exec
-        total_elapsed = end_time - enqueue_time
-        wait_seconds = max(0.0, total_elapsed - duration_s)
-        worker_response: Any = worker_payload
-        worker_meta: Dict[str, Any] = {}
-        if isinstance(worker_payload, dict):
-            maybe_response = worker_payload.get("response")
-            maybe_meta = worker_payload.get("meta")
-            if maybe_response is not None and isinstance(maybe_response, dict):
-                worker_response = maybe_response
-            if isinstance(maybe_meta, dict):
-                worker_meta = maybe_meta
-        worker_id = worker_meta.get("worker_id") if isinstance(worker_meta, dict) else None
-        worker_duration_ms = worker_meta.get("duration_ms") if isinstance(worker_meta, dict) else None
-        worker_predictions = worker_meta.get("predictions") if isinstance(worker_meta, dict) else None
-        if worker_id is not None:
-            queue_metrics["last_worker_id"] = worker_id
-        queue_metrics["completed"] += 1
-        queue_metrics["last_duration_ms"] = int(duration_s * 1000)
-        queue_metrics["last_wait_ms"] = int(wait_seconds * 1000)
-        queue_metrics["total_wait_ms"] += queue_metrics["last_wait_ms"]
+        if service is None:
+            with queue_metrics_lock:
+                queue_metrics["error_500_total"] += 1
+                queue_metrics["last_error_type"] = "InferencerUnavailable"
+            _queue_log("predict_inline_no_inferencer", req_id=req_id)
+            raise HTTPException(status_code=503, detail="Inference service not ready")
+
+        result_df = await asyncio.to_thread(
+            service.perform_inference,
+            df_for_inference,
+            inference_length=effective_inference_length,
+        )
+        if result_df is None:
+            with queue_metrics_lock:
+                queue_metrics["error_500_total"] += 1
+                queue_metrics["last_error_type"] = "InferenceSkipped"
+            if _PROMETHEUS_AVAILABLE:
+                try:
+                    JOB_OUTCOME.labels("skipped").inc()
+                except Exception:
+                    pass
+            _queue_log("predict_inline_skipped", req_id=req_id)
+            raise HTTPException(status_code=500, detail="Inference skipped (see server logs)")
+
+        duration_s = time.time() - start_exec
+        duration_ms = int(duration_s * 1000)
+        with queue_metrics_lock:
+            queue_metrics["completed"] += 1
+            queue_metrics["last_duration_ms"] = duration_ms
+            queue_metrics["last_error_type"] = None
+            queue_metrics["exec_samples"] += 1
+            queue_metrics["total_exec_ms"] += duration_ms
+            if duration_ms > queue_metrics["max_exec_ms"]:
+                queue_metrics["max_exec_ms"] = duration_ms
+    except HTTPException:
+        raise
+    except KeyError as exc:
+        with queue_metrics_lock:
+            queue_metrics["last_error_type"] = "MissingColumns"
+        detail = _format_missing_columns_error(exc)
         if _PROMETHEUS_AVAILABLE:
             try:
-                JOBS_PROCESSED.inc()
-                JOB_OUTCOME.labels("success").inc()
+                JOB_OUTCOME.labels("client_error").inc()
             except Exception:
                 pass
-        _refresh_prometheus_metrics(active_now=queue_metrics["active"], duration_s=duration_s, wait_seconds=wait_seconds)
-        _queue_log(
-            "queue_job_done",
-            req_id=req_id,
-            active=queue_metrics["active"],
-            completed=queue_metrics["completed"],
-            wait_ms=queue_metrics["last_wait_ms"],
-            duration_ms=queue_metrics["last_duration_ms"],
-            worker_id=worker_id,
-            worker_duration_ms=worker_duration_ms,
-            worker_predictions=worker_predictions,
-        )
-        response_payload = worker_response
-        if isinstance(response_payload, dict):
-            response_payload.setdefault("req_id", req_id)
-            response_payload.setdefault("cached", False)
-            try:
-                inf_store = _get_inferencer()
-                setattr(inf_store, "last_prediction_response", response_payload.copy())
-            except Exception:
-                pass
-        return response_payload
-    except asyncio.TimeoutError:
-        future.cancel()
-        end_time = time.time()
-        duration_s = end_time - start_exec
-        total_elapsed = end_time - enqueue_time
-        wait_seconds = max(0.0, total_elapsed - duration_s)
-        queue_metrics["timeouts"] += 1
-        queue_metrics["last_error_type"] = "TimeoutError"
-        queue_metrics["last_duration_ms"] = int(duration_s * 1000)
-        queue_metrics["last_wait_ms"] = int(wait_seconds * 1000)
-        queue_metrics["last_worker_id"] = None
-        if _PROMETHEUS_AVAILABLE:
-            try:
-                JOB_OUTCOME.labels("timeout").inc()
-            except Exception:
-                pass
-        _refresh_prometheus_metrics(active_now=queue_metrics["active"], duration_s=duration_s, wait_seconds=wait_seconds)
-        _queue_log(
-            "queue_job_timeout",
-            req_id=req_id,
-            timeout=INFERENCE_TIMEOUT,
-            wait_ms=queue_metrics["last_wait_ms"],
-            duration_ms=queue_metrics["last_duration_ms"],
-        )
-        raise HTTPException(status_code=504, detail="Inference timed out")
-    except InferenceHTTPError as ihe:
-        end_time = time.time()
-        duration_s = end_time - start_exec
-        total_elapsed = end_time - enqueue_time
-        wait_seconds = max(0.0, total_elapsed - duration_s)
-        queue_metrics["last_duration_ms"] = int(duration_s * 1000)
-        queue_metrics["last_wait_ms"] = int(wait_seconds * 1000)
-        worker_id = getattr(ihe, "worker_id", None)
-        if worker_id is not None:
-            queue_metrics["last_worker_id"] = worker_id
-        else:
-            queue_metrics["last_worker_id"] = None
-        if ihe.status_code >= 500:
-            queue_metrics["error_500_total"] += 1
-            queue_metrics["last_error_type"] = "InferenceHTTPError"
-            if _PROMETHEUS_AVAILABLE:
-                try:
-                    JOB_OUTCOME.labels("server_error").inc()
-                except Exception:
-                    pass
-        elif ihe.status_code == 429:
-            queue_metrics["rejected_busy"] += 1
-            if _PROMETHEUS_AVAILABLE:
-                try:
-                    JOB_OUTCOME.labels("busy").inc()
-                except Exception:
-                    pass
-        else:
-            if _PROMETHEUS_AVAILABLE:
-                try:
-                    JOB_OUTCOME.labels("client_error").inc()
-                except Exception:
-                    pass
-        _refresh_prometheus_metrics(active_now=queue_metrics["active"], duration_s=duration_s, wait_seconds=wait_seconds)
-        _queue_log("queue_job_http_error", req_id=req_id, status_code=ihe.status_code, worker_id=worker_id)
-        raise HTTPException(status_code=ihe.status_code, detail=ihe.detail)
+        raise HTTPException(status_code=400, detail=f"Missing required columns for inference: {detail}" if detail else "Missing required columns for inference") from exc
     except Exception as exc:  # noqa: BLE001
-        end_time = time.time()
-        duration_s = end_time - start_exec
-        total_elapsed = end_time - enqueue_time
-        wait_seconds = max(0.0, total_elapsed - duration_s)
-        queue_metrics["last_duration_ms"] = int(duration_s * 1000)
-        queue_metrics["last_wait_ms"] = int(wait_seconds * 1000)
-        queue_metrics["error_500_total"] += 1
-        queue_metrics["last_error_type"] = exc.__class__.__name__
+        with queue_metrics_lock:
+            queue_metrics["error_500_total"] += 1
+            queue_metrics["last_error_type"] = exc.__class__.__name__
         if _PROMETHEUS_AVAILABLE:
             try:
                 JOB_OUTCOME.labels("exception").inc()
             except Exception:
                 pass
-        _refresh_prometheus_metrics(active_now=queue_metrics["active"], duration_s=duration_s, wait_seconds=wait_seconds)
-        worker_id = getattr(exc, "worker_id", None)
-        if worker_id is not None:
-            queue_metrics["last_worker_id"] = worker_id
-        else:
-            queue_metrics["last_worker_id"] = None
-        _queue_log("queue_job_error", req_id=req_id, error=str(exc), worker_id=worker_id)
-        raise HTTPException(status_code=500, detail="Internal inference error")
+        _queue_log("predict_inline_error", req_id=req_id, error=str(exc))
+        raise HTTPException(status_code=500, detail="Inference execution failed") from exc
     finally:
-        queue_metrics["active"] = max(0, queue_metrics["active"] - 1)
-        release_slot()
-        _refresh_prometheus_metrics(active_now=queue_metrics["active"])
+        with queue_metrics_lock:
+            queue_metrics["active"] = max(0, queue_metrics["active"] - 1)
+            active_remaining = queue_metrics["active"]
+        semaphore.release()
+        _refresh_prometheus_metrics(duration_s)
+        _queue_log(
+            "predict_inline_active_update",
+            req_id=req_id,
+            active_workers=active_remaining,
+            concurrency_limit=PREDICT_MAX_CONCURRENCY,
+        )
+
+    assert duration_s is not None and result_df is not None
+
+    cols = ["value"] if "value" in result_df.columns else result_df.columns.tolist()
+    predictions: List[Dict[str, Any]] = []
+    for ts, row in result_df[cols].iterrows():
+        try:
+            ts_serial = ts.isoformat()
+        except Exception:
+            ts_serial = str(ts)
+        entry: Dict[str, Any] = {"ts": ts_serial}
+        for col in cols:
+            val = row[col]
+            try:
+                if val is None or (isinstance(val, float) and math.isnan(val)) or pd.isna(val):
+                    entry[col] = None
+                elif isinstance(val, (int, float)):
+                    if isinstance(val, float) and math.isinf(val):
+                        entry[col] = None
+                    else:
+                        entry[col] = float(val)
+                else:
+                    try:
+                        entry[col] = float(val)
+                    except (TypeError, ValueError):
+                        entry[col] = val
+            except Exception:
+                entry[col] = None
+        predictions.append(entry)
+
+    identifier = os.getenv("IDENTIFIER") or "default"
+    response_payload = {
+        "status": "SUCCESS",
+        "identifier": identifier,
+        "run_id": getattr(service, "current_run_id", None) if service else None,
+        "predictions": predictions,
+        "req_id": req_id,
+        "cached": False,
+    }
+
+    try:
+        setattr(service, "last_prediction_response", response_payload.copy())
+    except Exception:
+        pass
+
+    if _PROMETHEUS_AVAILABLE:
+        try:
+            JOBS_PROCESSED.inc()
+            JOB_OUTCOME.labels("success").inc()
+        except Exception:
+            pass
+    _queue_log(
+        "predict_inline_success",
+        req_id=req_id,
+        duration_ms=duration_ms,
+        wait_ms=int(wait_ms) if wait_ms is not None else None,
+        prep_ms=prep_ms_int,
+        predictions=len(predictions),
+    )
+    return response_payload
 
 @app.get("/queue_stats")
 def queue_stats():
-    qsize = _safe_queue_size()
-    return {"status": "ok", "qsize": qsize, **queue_metrics, "workers": QUEUE_WORKERS, "maxsize": QUEUE_MAXSIZE}
+    snapshot = metrics()
+    snapshot.pop("status", None)
+    with queue_metrics_lock:
+        snapshot.update(queue_metrics)
+    return {"status": "ok", **snapshot}
 
 
 # ---------------- Startup Readiness Gate (optional) -----------------
@@ -973,6 +1014,18 @@ async def _startup_event_nonblocking():  # pragma: no cover (startup side-effect
     except Exception:
         pass
 
+    try:
+        loop = asyncio.get_running_loop()
+        executor = _get_threadpool_executor()
+        loop.set_default_executor(executor)
+        _queue_log(
+            "threadpool_configured",
+            max_workers=getattr(executor, "_max_workers", None),
+            concurrency_limit=PREDICT_MAX_CONCURRENCY,
+        )
+    except Exception as exc:
+        _queue_log("threadpool_configure_failed", error=str(exc))
+
     # Ensure process pool is ready early so that once model arrives we can serve instantly.
     try:
         _ensure_process_pool_ready(_current_model_snapshot())
@@ -983,9 +1036,9 @@ async def _startup_event_nonblocking():  # pragma: no cover (startup side-effect
     try:
         if _PROMETHEUS_AVAILABLE:
             start_http_server(9091)
-            print(f"Started process pool with {QUEUE_WORKERS} workers | Queue maxsize = {QUEUE_MAXSIZE} | Metrics -> :9091", flush=True)
+            print("Started synchronous inference service | Metrics -> :9091", flush=True)
         else:
-            print(f"Started process pool with {QUEUE_WORKERS} workers | Queue maxsize = {QUEUE_MAXSIZE} | Metrics disabled (prometheus_client not installed)", flush=True)
+            print("Started synchronous inference service | Metrics disabled (prometheus_client not installed)", flush=True)
     except Exception:
         pass
 
@@ -993,6 +1046,11 @@ async def _startup_event_nonblocking():  # pragma: no cover (startup side-effect
         await _start_queue_monitor()
     except Exception:
         _queue_log("queue_monitor_start_failed")
+
+    try:
+        _ensure_event_loop_monitor_started()
+    except Exception:
+        pass
 
     async def _background_startup():
         nonlocal_ready_ms = None
@@ -1085,6 +1143,23 @@ async def _shutdown_event():  # pragma: no cover (shutdown side-effect)
         await _stop_queue_monitor()
     except Exception:
         pass
+    global _event_loop_monitor_task
+    if _event_loop_monitor_task is not None:
+        _event_loop_monitor_task.cancel()
+        try:
+            await _event_loop_monitor_task
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            pass
+        _event_loop_monitor_task = None
+    global _threadpool_executor
+    if _threadpool_executor is not None:
+        try:
+            _threadpool_executor.shutdown(wait=False, cancel_futures=True)
+        except Exception:
+            pass
+        _threadpool_executor = None
 
 if ENABLE_PUBLISH_API:
     class PublishRequest(BaseModel):

@@ -1,0 +1,48 @@
+[2025-10-28 18:02:19,388] 60bbecd5a8b6/INFO/locust.main: Starting Locust 2.41.5
+[2025-10-28 18:02:20,308] 60bbecd5a8b6/INFO/locust.runners: 218582e67338_b8fbbe831ab3488fa27c1b076b14a1a5 (index 0) reported as ready. 1 workers connected.
+[2025-10-28 18:02:20,308] 60bbecd5a8b6/INFO/locust.runners: 218582e67338_b8fbbe831ab3488fa27c1b076b14a1a5 (index 0) reported as ready. 1 workers connected.
+[2025-10-28 18:02:20,309] 60bbecd5a8b6/INFO/locust.runners: 218582e67338_b8fbbe831ab3488fa27c1b076b14a1a5 (index 0) reported as ready. 1 workers connected.
+[2025-10-28 18:02:20,309] 60bbecd5a8b6/INFO/locust.runners: 218582e67338_b8fbbe831ab3488fa27c1b076b14a1a5 (index 0) reported as ready. 1 workers connected.
+[2025-10-28 18:02:20,319] 60bbecd5a8b6/INFO/locust.runners: 218582e67338_b8fbbe831ab3488fa27c1b076b14a1a5 (index 0) reported as ready. 1 workers connected.
+[2025-10-28 18:02:20,320] 60bbecd5a8b6/INFO/locust.runners: 218582e67338_b8fbbe831ab3488fa27c1b076b14a1a5 (index 0) reported as ready. 1 workers connected.
+[2025-10-28 18:02:20,998] 60bbecd5a8b6/INFO/locust.runners: 18017842d3e8_0435ac1482084f748ed78fb80ee0679f (index 1) reported as ready. 2 workers connected.
+[2025-10-28 18:02:20,999] 60bbecd5a8b6/INFO/locust.runners: 18017842d3e8_0435ac1482084f748ed78fb80ee0679f (index 1) reported as ready. 2 workers connected.
+[2025-10-28 18:02:20,999] 60bbecd5a8b6/INFO/locust.runners: 18017842d3e8_0435ac1482084f748ed78fb80ee0679f (index 1) reported as ready. 2 workers connected.
+[2025-10-28 18:02:21,000] 60bbecd5a8b6/INFO/locust.runners: 18017842d3e8_0435ac1482084f748ed78fb80ee0679f (index 1) reported as ready. 2 workers connected.
+[2025-10-28 18:02:21,000] 60bbecd5a8b6/INFO/locust.runners: 18017842d3e8_0435ac1482084f748ed78fb80ee0679f (index 1) reported as ready. 2 workers connected.
+[2025-10-28 18:02:21,000] 60bbecd5a8b6/INFO/locust.runners: 18017842d3e8_0435ac1482084f748ed78fb80ee0679f (index 1) reported as ready. 2 workers connected.
+[2025-10-28 18:02:21,001] 60bbecd5a8b6/INFO/locust.runners: 18017842d3e8_0435ac1482084f748ed78fb80ee0679f (index 1) reported as ready. 2 workers connected.
+[2025-10-28 18:02:21,001] 60bbecd5a8b6/INFO/locust.runners: 18017842d3e8_0435ac1482084f748ed78fb80ee0679f (index 1) reported as ready. 2 workers connected.
+[2025-10-28 18:02:21,001] 60bbecd5a8b6/INFO/locust.runners: 18017842d3e8_0435ac1482084f748ed78fb80ee0679f (index 1) reported as ready. 2 workers connected.
+[2025-10-28 18:02:21,577] 60bbecd5a8b6/INFO/locust.runners: 5bbc101b3d8a_3faf83b811024fdfbb6dbfdee653f85c (index 2) reported as ready. 3 workers connected.
+[2025-10-28 18:02:21,577] 60bbecd5a8b6/INFO/locust.runners: 5bbc101b3d8a_3faf83b811024fdfbb6dbfdee653f85c (index 2) reported as ready. 3 workers connected.
+[2025-10-28 18:02:21,578] 60bbecd5a8b6/INFO/locust.runners: 5bbc101b3d8a_3faf83b811024fdfbb6dbfdee653f85c (index 2) reported as ready. 3 workers connected.
+[2025-10-28 18:02:23,026] 60bbecd5a8b6/INFO/locust.runners: 35f2cb1d75a6_3840cfd43d04430193f6cd88c3efcc36 (index 3) reported as ready. 4 workers connected.
+[2025-10-28 18:02:23,027] 60bbecd5a8b6/INFO/locust.runners: 35f2cb1d75a6_3840cfd43d04430193f6cd88c3efcc36 (index 3) reported as ready. 4 workers connected.
+[2025-10-28 18:02:23,027] 60bbecd5a8b6/INFO/locust.runners: 35f2cb1d75a6_3840cfd43d04430193f6cd88c3efcc36 (index 3) reported as ready. 4 workers connected.
+[2025-10-28 18:02:23,028] 60bbecd5a8b6/INFO/locust.runners: 35f2cb1d75a6_3840cfd43d04430193f6cd88c3efcc36 (index 3) reported as ready. 4 workers connected.
+[2025-10-28 18:02:23,028] 60bbecd5a8b6/INFO/locust.runners: 35f2cb1d75a6_3840cfd43d04430193f6cd88c3efcc36 (index 3) reported as ready. 4 workers connected.
+[2025-10-28 18:02:23,029] 60bbecd5a8b6/INFO/locust.runners: 35f2cb1d75a6_3840cfd43d04430193f6cd88c3efcc36 (index 3) reported as ready. 4 workers connected.
+[2025-10-28 18:02:23,030] 60bbecd5a8b6/INFO/locust.runners: 35f2cb1d75a6_3840cfd43d04430193f6cd88c3efcc36 (index 3) reported as ready. 4 workers connected.
+[2025-10-28 18:02:23,030] 60bbecd5a8b6/INFO/locust.runners: 35f2cb1d75a6_3840cfd43d04430193f6cd88c3efcc36 (index 3) reported as ready. 4 workers connected.
+[2025-10-28 18:02:23,408] 60bbecd5a8b6/INFO/locust.main: Run time limit set to 120 seconds
+[2025-10-28 18:02:23,409] 60bbecd5a8b6/INFO/locust.runners: Sending spawn jobs of 800 users at 80.00 spawn rate to 4 ready workers
+[2025-10-28 18:02:35,004] 60bbecd5a8b6/INFO/locust.runners: All users spawned: {"PipelineUser": 800} (800 total users)
+[2025-10-28 18:02:54,434] 60bbecd5a8b6/INFO/locust.runners: Worker 218582e67338_b8fbbe831ab3488fa27c1b076b14a1a5 failed to send heartbeat, setting state to missing.
+[2025-10-28 18:02:54,974] 60bbecd5a8b6/INFO/locust.runners: Worker 218582e67338_b8fbbe831ab3488fa27c1b076b14a1a5 self-healed with heartbeat, setting state to running.
+[2025-10-28 18:02:54,975] 60bbecd5a8b6/INFO/locust.runners: Sending spawn jobs of 800 users at 80.00 spawn rate to 3 ready workers
+[2025-10-28 18:02:55,980] 60bbecd5a8b6/INFO/locust.runners: Spawning is complete and report waittime is expired, but not all reports received from workers: {"PipelineUser": 600} (600 total users)
+[2025-10-28 18:02:57,437] 60bbecd5a8b6/INFO/locust.runners: Worker 18017842d3e8_0435ac1482084f748ed78fb80ee0679f failed to send heartbeat, setting state to missing.
+[2025-10-28 18:02:57,556] 60bbecd5a8b6/INFO/locust.runners: Worker 18017842d3e8_0435ac1482084f748ed78fb80ee0679f self-healed with heartbeat, setting state to running.
+[2025-10-28 18:02:59,439] 60bbecd5a8b6/INFO/locust.runners: Worker 218582e67338_b8fbbe831ab3488fa27c1b076b14a1a5 failed to send heartbeat, setting state to missing.
+[2025-10-28 18:03:00,441] 60bbecd5a8b6/INFO/locust.runners: Worker 5bbc101b3d8a_3faf83b811024fdfbb6dbfdee653f85c failed to send heartbeat, setting state to missing.
+[2025-10-28 18:03:00,443] 60bbecd5a8b6/INFO/locust.runners: Worker 35f2cb1d75a6_3840cfd43d04430193f6cd88c3efcc36 failed to send heartbeat, setting state to missing.
+[2025-10-28 18:03:00,702] 60bbecd5a8b6/INFO/locust.runners: Worker 35f2cb1d75a6_3840cfd43d04430193f6cd88c3efcc36 self-healed with heartbeat, setting state to running.
+[2025-10-28 18:03:01,446] 60bbecd5a8b6/INFO/locust.runners: Worker 218582e67338_b8fbbe831ab3488fa27c1b076b14a1a5 failed to send heartbeat, setting state to missing.
+[2025-10-28 18:03:01,447] 60bbecd5a8b6/INFO/locust.runners: Worker 5bbc101b3d8a_3faf83b811024fdfbb6dbfdee653f85c failed to send heartbeat, setting state to missing.
+[2025-10-28 18:03:01,912] 60bbecd5a8b6/INFO/locust.runners: Worker 218582e67338_b8fbbe831ab3488fa27c1b076b14a1a5 self-healed with heartbeat, setting state to running.
+[2025-10-28 18:03:01,925] 60bbecd5a8b6/INFO/locust.runners: Worker 5bbc101b3d8a_3faf83b811024fdfbb6dbfdee653f85c self-healed with heartbeat, setting state to running.
+[2025-10-28 18:04:23,414] 60bbecd5a8b6/INFO/locust.main: --run-time limit reached, shutting down
+[2025-10-28 18:04:23,643] 60bbecd5a8b6/INFO/locust.runners: Worker '5bbc101b3d8a_3faf83b811024fdfbb6dbfdee653f85c' (index 2) quit. 0 workers ready.
+[2025-10-28 18:04:23,856] 60bbecd5a8b6/INFO/locust.runners: Worker '218582e67338_b8fbbe831ab3488fa27c1b076b14a1a5' (index 0) quit. 0 workers ready.
+[2025-10-28 18:04:24,418] 60bbecd5a8b6/INFO/locust.main: Shutting down (exit code 1)

@@ -10,7 +10,9 @@ import pickle
 import tempfile
 import asyncio
 import logging
-from typing import Tuple, Optional, Union
+import threading
+import time
+from typing import Tuple, Optional, Union, Dict
 from sklearn.preprocessing import MinMaxScaler, StandardScaler, RobustScaler, MaxAbsScaler
 
 # Constants - These should all be defined by the service later
@@ -62,11 +64,14 @@ class Inferencer:
         self.model_class = ""  # "pytorch", "prophet", "statsforecast"
         # Track emitted (run_id, prediction_hash) to prevent duplicate JSONL rows
         self._emitted_prediction_keys: set[tuple[str, str]] = set()
-        # Busy flag to prevent concurrent long-running inference overlap
-        self.busy = False
+        self._emitted_prediction_lock = threading.Lock()
+        # Track active inference jobs for visibility/metrics without blocking concurrency
+        self._active_jobs = 0
+        self._active_jobs_lock = threading.Lock()
         # Track which run_ids we've already attempted scaler resolution for (prevents spammy logs)
         self._scaler_checked_run_ids = set()
         self.simulate_delay_secs = SIMULATE_DELAY_SECS
+        self._last_inference_timings = None
         logger.info("SIMULATE_DELAY_SECS=%s", self.simulate_delay_secs)
 
     async def simulate_delay_if_enabled(self) -> None:
@@ -280,6 +285,19 @@ class Inferencer:
         # Default fallback
         return "", "pytorch"
 
+    def _mark_job_started(self) -> None:
+        with self._active_jobs_lock:
+            self._active_jobs += 1
+
+    def _mark_job_finished(self) -> None:
+        with self._active_jobs_lock:
+            self._active_jobs = max(0, self._active_jobs - 1)
+
+    @property
+    def active_inference_jobs(self) -> int:
+        with self._active_jobs_lock:
+            return self._active_jobs
+
     def perform_inference(self, df_eval: Optional[pd.DataFrame] = None, inference_length: Optional[int] = None):
         """Execute inference.
 
@@ -295,9 +313,6 @@ class Inferencer:
         Optional[pd.DataFrame]
             Predictions dataframe (inverse scaled when possible) or None if skipped.
         """
-        if self.busy:
-            print({"service": "inference", "event": "predict_skip_busy"})
-            return None
         if df_eval is None:
             if self.df is None:
                 print("No data provided for inference and service dataframe is empty.")
@@ -315,7 +330,15 @@ class Inferencer:
             print("[INFO] Model not loaded yet. Deferring inference (no DLQ).")
             return None
         local_inference_length = int(inference_length) if inference_length is not None else INFERENCE_LENGTH
-        self.busy = True
+        self._mark_job_started()
+        timings: Dict[str, float] = {}
+        overall_start = time.perf_counter()
+
+        def _finalize_timings() -> None:
+            if "overall_ms" not in timings:
+                timings["overall_ms"] = (time.perf_counter() - overall_start) * 1000.0
+            self._last_inference_timings = {k: float(v) for k, v in timings.items()}
+
         print({"service": "inference", "event": "predict_inference_start", "inference_length": int(local_inference_length)})
         try:
             total_rows = len(df_eval.index)
@@ -330,10 +353,12 @@ class Inferencer:
                     "min_required": int(min_needed),
                     "action": "skip_inference"
                 })
+                _finalize_timings()
                 return None
             required_index = SAMPLE_IDX + self.input_seq_len
             if total_rows == 0:
                 print("[Inferencer] Empty dataframe passed to inference; aborting.")
+                _finalize_timings()
                 return None
             if required_index >= total_rows:
                 adjusted_start_pos = total_rows - 1
@@ -350,8 +375,14 @@ class Inferencer:
             else:
                 adjusted_start_pos = required_index
 
+            timings["precheck_ms"] = (time.perf_counter() - overall_start) * 1000.0
+
+            stage_start = time.perf_counter()
             timedelta = check_uniform(df_eval)
+            timings["check_uniform_ms"] = (time.perf_counter() - stage_start) * 1000.0
+
             start_timestamp = df_eval.index[adjusted_start_pos]
+            stage_start = time.perf_counter()
             df_predictions = pd.DataFrame(
                 index=pd.date_range(
                     start=start_timestamp,
@@ -361,23 +392,42 @@ class Inferencer:
                 columns=df_eval.columns
             )
             df_predictions = time_to_feature(df_predictions)
+            timings["prepare_prediction_frame_ms"] = (time.perf_counter() - stage_start) * 1000.0
 
+            branch_start = time.perf_counter()
             if self.model_class == "pytorch":
-                df_transformed_predictions = self._perform_pytorch_inference(df_eval, df_predictions, local_inference_length)
+                df_transformed_predictions = self._perform_pytorch_inference(df_eval, df_predictions, local_inference_length, timings)
             elif self.model_class == "prophet":
-                df_transformed_predictions = self._perform_prophet_inference(df_eval, df_predictions, local_inference_length)
+                df_transformed_predictions = self._perform_prophet_inference(df_eval, df_predictions, local_inference_length, timings)
             elif self.model_class == "statsforecast":
-                df_transformed_predictions = self._perform_statsforecast_inference(df_eval, df_predictions, local_inference_length)
+                df_transformed_predictions = self._perform_statsforecast_inference(df_eval, df_predictions, local_inference_length, timings)
             else:
                 raise ValueError(f"Unsupported model class: {self.model_class}")
+            timings["model_branch_ms"] = (time.perf_counter() - branch_start) * 1000.0
 
-            self._save_and_publish_predictions(df_transformed_predictions, df_eval)
+            save_start = time.perf_counter()
+            self._save_and_publish_predictions(df_transformed_predictions, df_eval, timings)
+            timings["save_publish_ms"] = (time.perf_counter() - save_start) * 1000.0
+
+            _finalize_timings()
             print({"service": "inference", "event": "predict_inference_end", "rows": int(df_transformed_predictions.shape[0])})
+            try:
+                print({
+                    "service": "inference",
+                    "event": "inference_stage_timings",
+                    "timings_ms": {k: round(v, 3) for k, v in timings.items()},
+                    "model_class": self.model_class,
+                    "rows_in": int(total_rows),
+                    "rows_out": int(df_transformed_predictions.shape[0])
+                })
+            except Exception:
+                pass
             return df_transformed_predictions
         finally:
-            self.busy = False
+            _finalize_timings()
+            self._mark_job_finished()
 
-    def _perform_pytorch_inference(self, df_eval: pd.DataFrame, df_predictions: pd.DataFrame, local_inference_length: int) -> pd.DataFrame:
+    def _perform_pytorch_inference(self, df_eval: pd.DataFrame, df_predictions: pd.DataFrame, local_inference_length: int, timings: Optional[Dict[str, float]] = None) -> pd.DataFrame:
         """PyTorch inference logic"""
         import torch
 
@@ -390,7 +440,11 @@ class Inferencer:
 
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+        window_start = time.perf_counter()
         X_eval, _ = window_data(df_eval, TIME_FEATURES, self.input_seq_len, self.output_seq_len)
+        if timings is not None:
+            timings["window_data_ms"] = (time.perf_counter() - window_start) * 1000.0
+            timings["window_rows"] = float(X_eval.shape[0])
         X_eval_tensor = torch.from_numpy(X_eval).float().to(device)
 
         remaining_real_data = X_eval.shape[0] - SAMPLE_IDX
@@ -398,8 +452,22 @@ class Inferencer:
 
         progress_interval = int(os.environ.get("PREDICT_PROGRESS_INTERVAL", 25))
         per_step_errors = []  # will store (step, mae_over_features) for overlapping steps with real data
+
+        def _timed_predict(payload):
+            start = time.perf_counter()
+            result = self.current_model.predict(payload)  # type: ignore
+            if timings is not None:
+                timings.setdefault("model_predict_ms", 0.0)
+                timings.setdefault("model_predict_calls", 0.0)
+                timings["model_predict_ms"] += (time.perf_counter() - start) * 1000.0
+                timings["model_predict_calls"] += 1.0
+            return result
+
+        loop_start = None
         with torch.no_grad():
             current_sequence = X_eval_tensor[SAMPLE_IDX].unsqueeze(0).to(device)
+            if timings is not None:
+                loop_start = time.perf_counter()
 
             for step in range(local_inference_length):
                 # Predict a full block of up to output_seq_len steps
@@ -408,7 +476,7 @@ class Inferencer:
                 # tolerant fallbacks: try as-is, then squeeze leading batch dim, then flatten to 2-D.
                 data_np = current_sequence.cpu().numpy()
                 try:
-                    multi_step_pred = self.current_model.predict(data_np)  # type: ignore
+                    multi_step_pred = _timed_predict(data_np)
                 except Exception as e_pred:
                     # Log the original error and attempt fallbacks
                     print({
@@ -422,7 +490,7 @@ class Inferencer:
                     try:
                         if data_np.ndim == 3 and data_np.shape[0] == 1:
                             alt = data_np.squeeze(0)
-                            multi_step_pred = self.current_model.predict(alt)  # type: ignore
+                            multi_step_pred = _timed_predict(alt)
                             print({"service": "inference", "event": "pyfunc_predict_fallback_squeeze", "orig_shape": data_np.shape, "new_shape": getattr(alt, "shape", None)})
                     except Exception as e2:
                         print({"service": "inference", "event": "pyfunc_predict_fallback_squeeze_fail", "error": str(e2)})
@@ -430,7 +498,7 @@ class Inferencer:
                     if multi_step_pred is None:
                         try:
                             flat = data_np.reshape(1, -1)
-                            multi_step_pred = self.current_model.predict(flat)  # type: ignore
+                            multi_step_pred = _timed_predict(flat)
                             print({"service": "inference", "event": "pyfunc_predict_fallback_flatten", "orig_shape": data_np.shape, "new_shape": getattr(flat, "shape", None)})
                         except Exception as e3:
                             print({"service": "inference", "event": "pyfunc_predict_fallback_flatten_fail", "error": str(e3)})
@@ -518,9 +586,13 @@ class Inferencer:
                 step += steps_to_use - 1  # outer loop also increments
 
 
+        if timings is not None and loop_start is not None:
+            timings["pytorch_loop_ms"] = (time.perf_counter() - loop_start) * 1000.0
+
         df_predictions = df_predictions.drop(columns=TIME_FEATURES)
 
         if self.current_scaler is not None:
+            inv_start = time.perf_counter()
             try:
                 original_cols = (
                     list(getattr(self.current_scaler, "feature_names_in_", []))
@@ -536,9 +608,15 @@ class Inferencer:
             except Exception as e:  # noqa: BLE001
                 print(f"[Warning] inverse scaling failed ({e}); returning raw predictions.")
                 df_transformed_predictions = df_predictions.copy()
+            finally:
+                if timings is not None:
+                    timings.setdefault("inverse_scale_ms", 0.0)
+                    timings["inverse_scale_ms"] += (time.perf_counter() - inv_start) * 1000.0
         else:
             print("[Warning] current_scaler is None. Returning raw predictions.")
             df_transformed_predictions = df_predictions.copy()
+            if timings is not None:
+                timings.setdefault("inverse_scale_ms", 0.0)
 
         print(f"PyTorch Inference completed:")
         print(f"- Used actual future values for first {min(available_future_steps, local_inference_length)} steps")
@@ -567,22 +645,33 @@ class Inferencer:
 
         return df_transformed_predictions
 
-    def _perform_prophet_inference(self, df_eval: pd.DataFrame, df_predictions: pd.DataFrame, local_inference_length: int) -> pd.DataFrame:
+    def _perform_prophet_inference(self, df_eval: pd.DataFrame, df_predictions: pd.DataFrame, local_inference_length: int, timings: Optional[Dict[str, float]] = None) -> pd.DataFrame:
         """Prophet inference logic"""
-        
+        predict_start = time.perf_counter()
         # Get predictions from Prophet model
         df_predictions = self.current_model.predict(df_predictions) # type: ignore
+        if timings is not None:
+            timings.setdefault("model_predict_ms", 0.0)
+            timings.setdefault("model_predict_calls", 0.0)
+            timings["model_predict_ms"] += (time.perf_counter() - predict_start) * 1000.0
+            timings["model_predict_calls"] += 1.0
         
         # Apply inverse scaling if scaler is available
         if self.current_scaler is not None:
+            inv_start = time.perf_counter()
             df_transformed_predictions = pd.DataFrame(
                 self.current_scaler.inverse_transform(df_predictions),
                 index=df_predictions.index,
                 columns=df_predictions.columns
             )
+            if timings is not None:
+                timings.setdefault("inverse_scale_ms", 0.0)
+                timings["inverse_scale_ms"] += (time.perf_counter() - inv_start) * 1000.0
         else:
             print("[Warning] current_scaler is None. Returning raw predictions.")
             df_transformed_predictions = df_predictions.copy()
+            if timings is not None:
+                timings.setdefault("inverse_scale_ms", 0.0)
 
         print(f"Prophet Inference completed:")
         print(f"- Total predictions generated: {df_transformed_predictions.shape[0]}")
@@ -590,7 +679,7 @@ class Inferencer:
 
         return df_transformed_predictions
 
-    def _perform_statsforecast_inference(self, df_eval: pd.DataFrame, df_predictions: pd.DataFrame, local_inference_length: int) -> pd.DataFrame:
+    def _perform_statsforecast_inference(self, df_eval: pd.DataFrame, df_predictions: pd.DataFrame, local_inference_length: int, timings: Optional[Dict[str, float]] = None) -> pd.DataFrame:
         """StatsForecast inference logic"""
 
         if self.params["downsampling"] == "0" or self.params["downsampling"] == self.params["frequency"]:
@@ -626,20 +715,30 @@ class Inferencer:
                 "X": exog_df,
                 "level": None
             }
-
-
+        predict_start = time.perf_counter()
         df_predictions = self.current_model.predict(input_dict) # type: ignore
+        if timings is not None:
+            timings.setdefault("model_predict_ms", 0.0)
+            timings.setdefault("model_predict_calls", 0.0)
+            timings["model_predict_ms"] += (time.perf_counter() - predict_start) * 1000.0
+            timings["model_predict_calls"] += 1.0
         
         # Apply inverse scaling if scaler is available
         if self.current_scaler is not None:
+            inv_start = time.perf_counter()
             df_transformed_predictions = pd.DataFrame(
                 self.current_scaler.inverse_transform(df_predictions),
                 index=df_predictions.index,
                 columns=df_predictions.columns
             )
+            if timings is not None:
+                timings.setdefault("inverse_scale_ms", 0.0)
+                timings["inverse_scale_ms"] += (time.perf_counter() - inv_start) * 1000.0
         else:
             print("[Warning] current_scaler is None. Returning raw predictions.")
             df_transformed_predictions = df_predictions.copy()
+            if timings is not None:
+                timings.setdefault("inverse_scale_ms", 0.0)
 
         print(f"StatsForecast Inference completed:")
         print(f"- Total predictions generated: {df_transformed_predictions.shape[0]}")
@@ -647,7 +746,12 @@ class Inferencer:
 
         return df_transformed_predictions
 
-    def _save_and_publish_predictions(self, df_transformed_predictions: pd.DataFrame, df_eval: Optional[pd.DataFrame] = None):
+    def _save_and_publish_predictions(
+        self,
+        df_transformed_predictions: pd.DataFrame,
+        df_eval: Optional[pd.DataFrame] = None,
+        timings: Optional[Dict[str, float]] = None,
+    ) -> None:
         """Write a single JSON object (one line) per inference batch to MinIO (JSONL) and emit Kafka confirmation.
 
         Required JSON fields:
@@ -663,6 +767,9 @@ class Inferencer:
         Append only: fetch existing object (if any), add one new line, re-upload.
         """
         if os.getenv("INFERENCE_DISABLE_LOG_UPLOAD", "0") in {"1", "true", "TRUE"}:
+            if timings is not None:
+                timings.setdefault("log_upload_skipped", 0.0)
+                timings["log_upload_skipped"] += 1.0
             return
 
         from datetime import datetime
@@ -678,6 +785,7 @@ class Inferencer:
         # --- Metrics & Samples -------------------------------------------------
         metrics_block: dict = {}
         samples_block: list = []
+        metrics_start = time.perf_counter()
         try:
             if df_eval is not None and not df_eval.empty:
                 pred_idx = df_transformed_predictions.index
@@ -741,6 +849,12 @@ class Inferencer:
                             })
         except Exception as e:  # noqa: BLE001
             metrics_block = {"metrics_error": str(e)}
+        finally:
+            if timings is not None:
+                timings.setdefault("metrics_block_ms", 0.0)
+                timings["metrics_block_ms"] += (time.perf_counter() - metrics_start) * 1000.0
+                timings.setdefault("samples_count", 0.0)
+                timings["samples_count"] += float(len(samples_block))
 
         # Step MAE sequence if available
         if hasattr(self, "_last_per_step_errors") and getattr(self, "_last_per_step_errors"):
@@ -757,18 +871,23 @@ class Inferencer:
         # Deduplication: skip if we've already emitted this exact prediction hash for this run
         run_id = getattr(self, "current_run_id", "")
         pred_key = (run_id, pred_hash)
-        if run_id and pred_hash and pred_key in self._emitted_prediction_keys:
-            print({
-                "service": "inference",
-                "event": "duplicate_prediction_skip",
-                "run_id": run_id,
-                "prediction_hash": pred_hash
-            })
-            return  # Do not append another identical line
-        if run_id and pred_hash:
-            self._emitted_prediction_keys.add(pred_key)
+        with self._emitted_prediction_lock:
+            if run_id and pred_hash and pred_key in self._emitted_prediction_keys:
+                print({
+                    "service": "inference",
+                    "event": "duplicate_prediction_skip",
+                    "run_id": run_id,
+                    "prediction_hash": pred_hash
+                })
+                if timings is not None:
+                    timings.setdefault("save_publish_dedup_skips", 0.0)
+                    timings["save_publish_dedup_skips"] += 1.0
+                return  # Do not append another identical line
+            if run_id and pred_hash:
+                self._emitted_prediction_keys.add(pred_key)
 
         # Build JSON line
+        serialize_start = time.perf_counter()
         record = {
             "timestamp": datetime.utcnow().isoformat() + "Z",
             "identifier": identifier,
@@ -781,16 +900,26 @@ class Inferencer:
         }
 
         line = json.dumps(record, default=str) + "\n"
+        if timings is not None:
+            timings.setdefault("json_serialize_ms", 0.0)
+            timings["json_serialize_ms"] += (time.perf_counter() - serialize_start) * 1000.0
 
         # --- Append to MinIO object (download + append + re-upload) -----------
         from client_utils import post_file
         max_retries = 3
         for attempt in range(1, max_retries + 1):
             try:
+                fetch_start = time.perf_counter()
                 try:
                     existing_obj = get_file(self.gateway_url, bucket, object_key)
                 except Exception:
                     existing_obj = None
+                finally:
+                    if timings is not None:
+                        timings.setdefault("log_fetch_ms", 0.0)
+                        timings["log_fetch_ms"] += (time.perf_counter() - fetch_start) * 1000.0
+                        timings.setdefault("log_fetch_calls", 0.0)
+                        timings["log_fetch_calls"] += 1.0
                 if existing_obj is None:
                     existing_bytes = b""
                 else:
@@ -799,7 +928,13 @@ class Inferencer:
                     except Exception:
                         existing_bytes = existing_obj if isinstance(existing_obj, (bytes, bytearray)) else b""
                 new_body = existing_bytes + line.encode()
+                upload_start = time.perf_counter()
                 post_file(self.gateway_url, bucket, object_key, new_body)
+                if timings is not None:
+                    timings.setdefault("log_upload_ms", 0.0)
+                    timings["log_upload_ms"] += (time.perf_counter() - upload_start) * 1000.0
+                    timings.setdefault("log_upload_attempts", 0.0)
+                    timings["log_upload_attempts"] += 1.0
                 print({
                     "service": "inference",
                     "event": "inference_log_write",
@@ -811,6 +946,9 @@ class Inferencer:
                 })
                 break
             except Exception as e:  # noqa: BLE001
+                if timings is not None:
+                    timings.setdefault("log_upload_failures", 0.0)
+                    timings["log_upload_failures"] += 1.0
                 if attempt == max_retries:
                     publish_error(
                         self.producer,
@@ -825,6 +963,7 @@ class Inferencer:
 
         # --- Publish Kafka success event --------------------------------------
         try:
+            publish_start = time.perf_counter()
             produce_message(self.producer, self.output_topic, {
                 "operation": "Inference",
                 "status": status,
@@ -836,5 +975,13 @@ class Inferencer:
                 "config_hash": record.get("config_hash"),
                 "rows": metrics_block.get("rows_predicted", 0)
             })
+            if timings is not None:
+                timings.setdefault("kafka_publish_ms", 0.0)
+                timings["kafka_publish_ms"] += (time.perf_counter() - publish_start) * 1000.0
+                timings.setdefault("kafka_publish_calls", 0.0)
+                timings["kafka_publish_calls"] += 1.0
         except Exception as e:  # noqa: BLE001
             print(f"Kafka inference publish error (non-fatal): {e}")
+            if timings is not None:
+                timings.setdefault("kafka_publish_errors", 0.0)
+                timings["kafka_publish_errors"] += 1.0

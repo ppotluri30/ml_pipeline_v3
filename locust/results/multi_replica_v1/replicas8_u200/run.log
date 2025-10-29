@@ -1,0 +1,15 @@
+[2025-10-28 19:07:08,211] 9963900e234c/INFO/locust.main: Starting Locust 2.41.5
+[2025-10-28 19:07:08,635] 9963900e234c/INFO/locust.runners: d5bffc2f1e63_e057bc02a0a24089b39210d3823c7aec (index 0) reported as ready. 1 workers connected.
+[2025-10-28 19:07:09,187] 9963900e234c/INFO/locust.runners: 2299b0e58c82_ffa98468140440e78adae1ff2e1aa0a6 (index 1) reported as ready. 2 workers connected.
+[2025-10-28 19:07:09,268] 9963900e234c/INFO/locust.main: Run time limit set to 120 seconds
+[2025-10-28 19:07:09,269] 9963900e234c/INFO/locust.runners: Sending spawn jobs of 200 users at 40.00 spawn rate to 2 ready workers
+[2025-10-28 19:07:09,583] 9963900e234c/INFO/locust.runners: 1fc4bf9f6181_2fe4453879924878a947f411de744834 (index 2) reported as ready. 3 workers connected.
+[2025-10-28 19:07:09,921] 9963900e234c/INFO/locust.runners: b77e3908f388_44e317a1e06141a0998efd2e7adc7463 (index 3) reported as ready. 4 workers connected.
+[2025-10-28 19:07:16,343] 9963900e234c/INFO/locust.runners: Spawning is complete and report waittime is expired, but not all reports received from workers: {"PipelineUser": 190} (190 total users)
+[2025-10-28 19:09:09,263] 9963900e234c/INFO/locust.main: --run-time limit reached, shutting down
+[2025-10-28 19:09:09,324] 9963900e234c/INFO/locust.runners: Worker '1fc4bf9f6181_2fe4453879924878a947f411de744834' (index 2) quit. 0 workers ready.
+[2025-10-28 19:09:09,325] 9963900e234c/INFO/locust.runners: Worker 'b77e3908f388_44e317a1e06141a0998efd2e7adc7463' (index 3) quit. 0 workers ready.
+[2025-10-28 19:09:09,331] 9963900e234c/INFO/locust.runners: Worker 'd5bffc2f1e63_e057bc02a0a24089b39210d3823c7aec' (index 0) quit. 0 workers ready.
+[2025-10-28 19:09:09,334] 9963900e234c/INFO/locust.runners: Worker '2299b0e58c82_ffa98468140440e78adae1ff2e1aa0a6' (index 1) quit. 0 workers ready.
+[2025-10-28 19:09:09,335] 9963900e234c/INFO/locust.runners: The last worker quit, stopping test.
+[2025-10-28 19:09:10,265] 9963900e234c/INFO/locust.main: Shutting down (exit code 0)

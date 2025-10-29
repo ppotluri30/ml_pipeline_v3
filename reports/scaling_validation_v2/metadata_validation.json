@@ -1,0 +1,12 @@
+{
+  "issues": [
+    "Replica 1.0 / 800.0 users: max_user_count=1000.0",
+    "Replica 2.0 / 200.0 users: spawn mismatch log=40.0 approx=100.00",
+    "Replica 2.0 / 400.0 users: spawn mismatch log=60.0 approx=100.00",
+    "Replica 2.0 / 800.0 users: spawn mismatch log=80.0 approx=114.29",
+    "Replica 4.0 / 200.0 users: spawn mismatch log=40.0 approx=100.00",
+    "Replica 4.0 / 400.0 users: spawn mismatch log=60.0 approx=100.00",
+    "Replica 4.0 / 800.0 users: max_user_count=1200.0",
+    "Replica 4.0 / 800.0 users: spawn mismatch log=80.0 approx=114.29"
+  ]
+}

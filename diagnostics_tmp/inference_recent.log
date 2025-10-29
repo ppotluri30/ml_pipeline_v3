@@ -1,0 +1,200 @@
+﻿inference-1  | {'service': 'inference', 'event': 'predict_inline_start', 'source': 'api', 'req_id': '9818b7d8', 'rows': 30, 'inference_length': 1, 'active_workers': 15, 'concurrency_limit': 16}
+inference-1  | INFO:     172.18.0.3:46448 - "POST /predict HTTP/1.1" 200 OK
+inference-1  | {'service': 'inference', 'event': 'predict_inline_active_update', 'source': 'api', 'req_id': '9272e8d8', 'active_workers': 14, 'concurrency_limit': 16}
+inference-1  | {'service': 'inference', 'event': 'predict_inference_start', 'inference_length': 1}
+inference-1  | Most common frequency accounts for 96.67% of the time steps.
+inference-1  | Warning: sampling frequency is irregular. Resampling is recommended{'service': 'inference', 'event': 'predict_inline_success', 'source': 'api', 'req_id': '9272e8d8', 'duration_ms': 574, 'predictions': 1}
+inference-1  | 
+inference-1  | [Warning] current_scaler is None. Returning raw predictions.[Warning] current_scaler is None. Returning raw predictions.{'service': 'inference', 'event': 'predict_inline_active_update', 'source': 'api', 'req_id': '5796ccc3', 'active_workers': 13, 'concurrency_limit': 16}
+inference-1  | 
+inference-1  | 
+inference-1  | PyTorch Inference completed:
+inference-1  | - Used actual future values for first 1 steps
+inference-1  | {'service': 'inference', 'event': 'predict_inline_success', 'source': 'api', 'req_id': '5796ccc3', 'duration_ms': 593, 'predictions': 1}
+inference-1  | INFO:     172.18.0.3:46490 - "POST /predict HTTP/1.1" 200 OK
+inference-1  | - Model predicts 1 step(s) at a time{'service': 'inference', 'event': 'predict_inline_active_update', 'source': 'api', 'req_id': 'f7a4c876', 'active_workers': 12, 'concurrency_limit': 16}
+inference-1  | 
+inference-1  | [Warning] current_scaler is None. Returning raw predictions.
+inference-1  | PyTorch Inference completed:
+inference-1  | {'service': 'inference', 'event': 'predict_inline_success', 'source': 'api', 'req_id': 'f7a4c876', 'duration_ms': 642, 'predictions': 1}- Total predictions generated: 1PyTorch Inference completed:
+inference-1  | 
+inference-1  | - Used actual future values for first 1 steps- Used actual future values for first 1 steps
+inference-1  | 
+inference-1  | {'service': 'inference', 'event': 'inference_shape_summary', 'feature_dim': 17, 'output_seq_len': 1, 'input_seq_len': 10, 'pred_columns': ['down', 'up', 'rnti_count', 'mcs_down', 'mcs_down_var', 'mcs_up', 'mcs_up_var', 'rb_down', 'rb_down_var', 'rb_up', 'rb_up_var']}INFO:     172.18.0.3:46460 - "POST /predict HTTP/1.1" 200 OK
+inference-1  | - Model predicts 1 step(s) at a time{'service': 'inference', 'event': 'predict_inline_active_update', 'source': 'api', 'req_id': '3349f29e', 'active_workers': 11, 'concurrency_limit': 16}
+inference-1  | {'service': 'inference', 'event': 'predict_inline_success', 'source': 'api', 'req_id': '3349f29e', 'duration_ms': 647, 'predictions': 1}
+inference-1  | INFO:     172.18.0.3:46476 - "POST /predict HTTP/1.1" 200 OK
+inference-1  | 
+inference-1  | - Total predictions generated: 1
+inference-1  | 
+inference-1  | {'service': 'inference', 'event': 'predict_inline_active_update', 'source': 'api', 'req_id': '472615dc', 'active_workers': 10, 'concurrency_limit': 16}[Warning] current_scaler is None. Returning raw predictions.
+inference-1  | PyTorch Inference completed:
+inference-1  | - Model predicts 1 step(s) at a time[Warning] current_scaler is None. Returning raw predictions.
+inference-1  | PyTorch Inference completed:
+inference-1  | [Warning] current_scaler is None. Returning raw predictions.
+inference-1  | PyTorch Inference completed:- Used actual future values for first 1 steps
+inference-1  | 
+inference-1  | - Total predictions generated: 1- Used actual future values for first 1 steps
+inference-1  | 
+inference-1  | - Model predicts 1 step(s) at a time
+inference-1  | - Total predictions generated: 1[Warning] current_scaler is None. Returning raw predictions.
+inference-1  | PyTorch Inference completed:
+inference-1  | 
+inference-1  | {'service': 'inference', 'event': 'inference_shape_summary', 'feature_dim': 17, 'output_seq_len': 1, 'input_seq_len': 10, 'pred_columns': ['down', 'up', 'rnti_count', 'mcs_down', 'mcs_down_var', 'mcs_up', 'mcs_up_var', 'rb_down', 'rb_down_var', 'rb_up', 'rb_up_var']}
+inference-1  | {'service': 'inference', 'event': 'inference_shape_summary', 'feature_dim': 17, 'output_seq_len': 1, 'input_seq_len': 10, 'pred_columns': ['down', 'up', 'rnti_count', 'mcs_down', 'mcs_down_var', 'mcs_up', 'mcs_up_var', 'rb_down', 'rb_down_var', 'rb_up', 'rb_up_var']}- Used actual future values for first 1 steps
+inference-1  | 
+inference-1  | - Model predicts 1 step(s) at a time
+inference-1  | {'service': 'inference', 'event': 'inference_shape_summary', 'feature_dim': 17, 'output_seq_len': 1, 'input_seq_len': 10, 'pred_columns': ['down', 'up', 'rnti_count', 'mcs_down', 'mcs_down_var', 'mcs_up', 'mcs_up_var', 'rb_down', 'rb_down_var', 'rb_up', 'rb_up_var']}
+inference-1  | - Used actual future values for first 1 steps
+inference-1  | - Model predicts 1 step(s) at a time
+inference-1  | 
+inference-1  | 
+inference-1  | {'service': 'inference', 'event': 'predict_inference_end', 'rows': 1}
+inference-1  | - Model predicts 1 step(s) at a time- Total predictions generated: 1
+inference-1  | - Total predictions generated: 1
+inference-1  | {'service': 'inference', 'event': 'predict_inference_end', 'rows': 1}
+inference-1  | 
+inference-1  | {'service': 'inference', 'event': 'predict_inference_end', 'rows': 1}
+inference-1  | {'service': 'inference', 'event': 'inference_shape_summary', 'feature_dim': 17, 'output_seq_len': 1, 'input_seq_len': 10, 'pred_columns': ['down', 'up', 'rnti_count', 'mcs_down', 'mcs_down_var', 'mcs_up', 'mcs_up_var', 'rb_down', 'rb_down_var', 'rb_up', 'rb_up_var']}{'service': 'inference', 'event': 'predict_inline_success', 'source': 'api', 'req_id': '472615dc', 'duration_ms': 605, 'predictions': 1}- Total predictions generated: 1
+inference-1  | {'service': 'inference', 'event': 'inference_shape_summary', 'feature_dim': 17, 'output_seq_len': 1, 'input_seq_len': 10, 'pred_columns': ['down', 'up', 'rnti_count', 'mcs_down', 'mcs_down_var', 'mcs_up', 'mcs_up_var', 'rb_down', 'rb_down_var', 'rb_up', 'rb_up_var']}
+inference-1  | {'service': 'inference', 'event': 'predict_inference_end', 'rows': 1}
+inference-1  | 
+inference-1  | 
+inference-1  | {'service': 'inference', 'event': 'inference_shape_summary', 'feature_dim': 17, 'output_seq_len': 1, 'input_seq_len': 10, 'pred_columns': ['down', 'up', 'rnti_count', 'mcs_down', 'mcs_down_var', 'mcs_up', 'mcs_up_var', 'rb_down', 'rb_down_var', 'rb_up', 'rb_up_var']}
+inference-1  | 
+inference-1  | {'service': 'inference', 'event': 'predict_inference_end', 'rows': 1}{'service': 'inference', 'event': 'predict_inference_end', 'rows': 1}
+inference-1  | 
+inference-1  | {'service': 'inference', 'event': 'predict_inference_end', 'rows': 1}INFO:     172.18.0.3:46506 - "POST /predict HTTP/1.1" 200 OK
+inference-1  | 
+inference-1  | INFO:     172.18.0.3:46538 - "POST /predict HTTP/1.1" 200 OK
+inference-1  | INFO:     172.18.0.3:52480 - "POST /predict HTTP/1.1" 200 OK
+inference-1  | INFO:     172.18.0.3:46522 - "POST /predict HTTP/1.1" 200 OK
+inference-1  | INFO:     172.18.0.3:46524 - "POST /predict HTTP/1.1" 200 OK
+inference-1  | {'service': 'inference', 'event': 'predict_inline_active_update', 'source': 'api', 'req_id': 'a67469f5', 'active_workers': 9, 'concurrency_limit': 16}
+inference-1  | {'service': 'inference', 'event': 'predict_inline_success', 'source': 'api', 'req_id': 'a67469f5', 'duration_ms': 490, 'predictions': 1}
+inference-1  | {'service': 'inference', 'event': 'predict_inline_active_update', 'source': 'api', 'req_id': '9de3e6c2', 'active_workers': 8, 'concurrency_limit': 16}
+inference-1  | {'service': 'inference', 'event': 'predict_inline_success', 'source': 'api', 'req_id': '9de3e6c2', 'duration_ms': 495, 'predictions': 1}
+inference-1  | {'service': 'inference', 'event': 'predict_inline_active_update', 'source': 'api', 'req_id': 'a636b73c', 'active_workers': 7, 'concurrency_limit': 16}
+inference-1  | {'service': 'inference', 'event': 'predict_inline_success', 'source': 'api', 'req_id': 'a636b73c', 'duration_ms': 496, 'predictions': 1}
+inference-1  | {'service': 'inference', 'event': 'predict_inline_active_update', 'source': 'api', 'req_id': 'd05ea76e', 'active_workers': 6, 'concurrency_limit': 16}
+inference-1  | {'service': 'inference', 'event': 'predict_inline_success', 'source': 'api', 'req_id': 'd05ea76e', 'duration_ms': 499, 'predictions': 1}
+inference-1  | INFO:     172.18.0.3:43148 - "POST /predict HTTP/1.1" 200 OK
+inference-1  | {'service': 'inference', 'event': 'predict_inline_active_update', 'source': 'api', 'req_id': '6723c0d2', 'active_workers': 5, 'concurrency_limit': 16}
+inference-1  | {'service': 'inference', 'event': 'predict_inline_success', 'source': 'api', 'req_id': '6723c0d2', 'duration_ms': 250, 'predictions': 1}
+inference-1  | {'service': 'inference', 'event': 'predict_inline_active_update', 'source': 'api', 'req_id': '172d820e', 'active_workers': 4, 'concurrency_limit': 16}
+inference-1  | {'service': 'inference', 'event': 'predict_inline_success', 'source': 'api', 'req_id': '172d820e', 'duration_ms': 509, 'predictions': 1}
+inference-1  | {'service': 'inference', 'event': 'predict_inline_active_update', 'source': 'api', 'req_id': '2f789844', 'active_workers': 3, 'concurrency_limit': 16}
+inference-1  | {'service': 'inference', 'event': 'predict_inline_success', 'source': 'api', 'req_id': '2f789844', 'duration_ms': 429, 'predictions': 1}
+inference-1  | INFO:     172.18.0.3:43156 - "POST /predict HTTP/1.1" 200 OK
+inference-1  | INFO:     172.18.0.3:51604 - "POST /predict HTTP/1.1" 200 OK
+inference-1  | INFO:     172.18.0.3:43290 - "POST /predict HTTP/1.1" 200 OK
+inference-1  | INFO:     172.18.0.3:46554 - "POST /predict HTTP/1.1" 200 OK
+inference-1  | INFO:     172.18.0.3:43128 - "POST /predict HTTP/1.1" 200 OK
+inference-1  | INFO:     172.18.0.3:43090 - "POST /predict HTTP/1.1" 200 OK
+inference-1  | INFO:     172.18.0.3:46556 - "POST /predict HTTP/1.1" 200 OK
+inference-1  | {'service': 'inference', 'event': 'http_request_in', 'method': 'GET', 'path': '/healthz'}
+inference-1  | INFO:     172.18.0.3:50544 - "GET /healthz HTTP/1.1" 200 OK
+inference-1  | [Warning] current_scaler is None. Returning raw predictions.[Warning] current_scaler is None. Returning raw predictions.
+inference-1  | PyTorch Inference completed:
+inference-1  | - Used actual future values for first 1 steps
+inference-1  | 
+inference-1  | - Model predicts 1 step(s) at a timePyTorch Inference completed:
+inference-1  | - Total predictions generated: 1
+inference-1  | 
+inference-1  | - Used actual future values for first 1 steps
+inference-1  | {'service': 'inference', 'event': 'inference_shape_summary', 'feature_dim': 17, 'output_seq_len': 1, 'input_seq_len': 10, 'pred_columns': ['down', 'up', 'rnti_count', 'mcs_down', 'mcs_down_var', 'mcs_up', 'mcs_up_var', 'rb_down', 'rb_down_var', 'rb_up', 'rb_up_var']}- Model predicts 1 step(s) at a time
+inference-1  | - Total predictions generated: 1
+inference-1  | 
+inference-1  | {'service': 'inference', 'event': 'inference_shape_summary', 'feature_dim': 17, 'output_seq_len': 1, 'input_seq_len': 10, 'pred_columns': ['down', 'up', 'rnti_count', 'mcs_down', 'mcs_down_var', 'mcs_up', 'mcs_up_var', 'rb_down', 'rb_down_var', 'rb_up', 'rb_up_var']}[Warning] current_scaler is None. Returning raw predictions.{'service': 'inference', 'event': 'predict_inference_end', 'rows': 1}
+inference-1  | PyTorch Inference completed:
+inference-1  | 
+inference-1  | 
+inference-1  | - Used actual future values for first 1 steps
+inference-1  | - Model predicts 1 step(s) at a time
+inference-1  | {'service': 'inference', 'event': 'predict_inference_end', 'rows': 1}
+inference-1  | {'service': 'inference', 'event': 'predict_inline_active_update', 'source': 'api', 'req_id': '25da6920', 'active_workers': 2, 'concurrency_limit': 16}- Total predictions generated: 1
+inference-1  | 
+inference-1  | {'service': 'inference', 'event': 'predict_inline_success', 'source': 'api', 'req_id': '25da6920', 'duration_ms': 301, 'predictions': 1}{'service': 'inference', 'event': 'inference_shape_summary', 'feature_dim': 17, 'output_seq_len': 1, 'input_seq_len': 10, 'pred_columns': ['down', 'up', 'rnti_count', 'mcs_down', 'mcs_down_var', 'mcs_up', 'mcs_up_var', 'rb_down', 'rb_down_var', 'rb_up', 'rb_up_var']}
+inference-1  | {'service': 'inference', 'event': 'predict_inference_end', 'rows': 1}
+inference-1  | {'service': 'inference', 'event': 'predict_inline_active_update', 'source': 'api', 'req_id': '15828155', 'active_workers': 1, 'concurrency_limit': 16}
+inference-1  | 
+inference-1  | {'service': 'inference', 'event': 'predict_inline_success', 'source': 'api', 'req_id': '15828155', 'duration_ms': 290, 'predictions': 1}
+inference-1  | INFO:     172.18.0.3:51634 - "POST /predict HTTP/1.1" 200 OK
+inference-1  | {'service': 'inference', 'event': 'predict_inline_active_update', 'source': 'api', 'req_id': '9818b7d8', 'active_workers': 0, 'concurrency_limit': 16}
+inference-1  | {'service': 'inference', 'event': 'predict_inline_success', 'source': 'api', 'req_id': '9818b7d8', 'duration_ms': 261, 'predictions': 1}
+inference-1  | INFO:     172.18.0.3:43112 - "POST /predict HTTP/1.1" 200 OK
+inference-1  | INFO:     172.18.0.3:51262 - "POST /predict HTTP/1.1" 200 OK
+inference-1  | {'service': 'inference', 'event': 'http_request_in', 'method': 'GET', 'path': '/healthz'}
+inference-1  | INFO:     172.18.0.3:50550 - "GET /healthz HTTP/1.0" 200 OK
+inference-1  | {'service': 'inference', 'event': 'http_request_in', 'method': 'GET', 'path': '/healthz'}
+inference-1  | INFO:     172.18.0.3:50554 - "GET /healthz HTTP/1.0" 200 OK
+inference-1  | {'service': 'inference', 'event': 'http_request_in', 'method': 'GET', 'path': '/ready'}
+inference-1  | INFO:     127.0.0.1:43582 - "GET /ready HTTP/1.1" 200 OK
+inference-1  | {'service': 'inference', 'event': 'http_request_in', 'method': 'GET', 'path': '/healthz'}
+inference-1  | INFO:     172.18.0.3:50568 - "GET /healthz HTTP/1.0" 200 OK
+inference-1  | {'service': 'inference', 'event': 'http_request_in', 'method': 'GET', 'path': '/healthz'}
+inference-1  | INFO:     172.18.0.3:50578 - "GET /healthz HTTP/1.1" 200 OK
+inference-1  | {'service': 'inference', 'event': 'http_request_in', 'method': 'GET', 'path': '/healthz'}
+inference-1  | INFO:     172.18.0.3:46144 - "GET /healthz HTTP/1.0" 200 OK
+inference-1  | {'service': 'inference', 'event': 'http_request_in', 'method': 'GET', 'path': '/healthz'}
+inference-1  | INFO:     172.18.0.3:46158 - "GET /healthz HTTP/1.0" 200 OK
+inference-1  | {'service': 'inference', 'event': 'http_request_in', 'method': 'GET', 'path': '/ready'}
+inference-1  | INFO:     127.0.0.1:53198 - "GET /ready HTTP/1.1" 200 OK
+inference-1  | {'service': 'inference', 'event': 'http_request_in', 'method': 'GET', 'path': '/healthz'}
+inference-1  | INFO:     172.18.0.3:46166 - "GET /healthz HTTP/1.1" 200 OK
+inference-1  | {'service': 'inference', 'event': 'http_request_in', 'method': 'GET', 'path': '/healthz'}
+inference-1  | INFO:     172.18.0.3:46170 - "GET /healthz HTTP/1.0" 200 OK
+inference-1  | {'service': 'inference', 'event': 'http_request_in', 'method': 'GET', 'path': '/healthz'}
+inference-1  | INFO:     172.18.0.3:46180 - "GET /healthz HTTP/1.0" 200 OK
+inference-1  | {'service': 'inference', 'event': 'http_request_in', 'method': 'GET', 'path': '/ready'}
+inference-1  | INFO:     127.0.0.1:53204 - "GET /ready HTTP/1.1" 200 OK
+inference-1  | {'service': 'inference', 'event': 'http_request_in', 'method': 'GET', 'path': '/healthz'}
+inference-1  | INFO:     172.18.0.3:46194 - "GET /healthz HTTP/1.0" 200 OK
+inference-1  | {'service': 'inference', 'event': 'http_request_in', 'method': 'GET', 'path': '/healthz'}
+inference-1  | INFO:     172.18.0.3:46204 - "GET /healthz HTTP/1.1" 200 OK
+inference-1  | {'service': 'inference', 'event': 'http_request_in', 'method': 'GET', 'path': '/healthz'}
+inference-1  | INFO:     172.18.0.3:60738 - "GET /healthz HTTP/1.0" 200 OK
+inference-1  | {'service': 'inference', 'event': 'http_request_in', 'method': 'GET', 'path': '/healthz'}
+inference-1  | INFO:     172.18.0.3:60742 - "GET /healthz HTTP/1.0" 200 OK
+inference-1  | {'service': 'inference', 'event': 'http_request_in', 'method': 'GET', 'path': '/ready'}
+inference-1  | INFO:     127.0.0.1:39926 - "GET /ready HTTP/1.1" 200 OK
+inference-1  | {'service': 'inference', 'event': 'http_request_in', 'method': 'GET', 'path': '/healthz'}
+inference-1  | INFO:     172.18.0.3:60758 - "GET /healthz HTTP/1.1" 200 OK
+inference-1  | {'service': 'inference', 'event': 'http_request_in', 'method': 'GET', 'path': '/healthz'}
+inference-1  | INFO:     172.18.0.3:60770 - "GET /healthz HTTP/1.0" 200 OK
+inference-1  | {'service': 'inference', 'event': 'http_request_in', 'method': 'GET', 'path': '/healthz'}
+inference-1  | INFO:     172.18.0.3:60772 - "GET /healthz HTTP/1.0" 200 OK
+inference-1  | {'service': 'inference', 'event': 'http_request_in', 'method': 'GET', 'path': '/healthz'}
+inference-1  | INFO:     172.18.0.3:60780 - "GET /healthz HTTP/1.0" 200 OK
+inference-1  | {'service': 'inference', 'event': 'http_request_in', 'method': 'GET', 'path': '/ready'}
+inference-1  | INFO:     127.0.0.1:39936 - "GET /ready HTTP/1.1" 200 OK
+inference-1  | {'service': 'inference', 'event': 'http_request_in', 'method': 'GET', 'path': '/healthz'}
+inference-1  | INFO:     172.18.0.3:60786 - "GET /healthz HTTP/1.1" 200 OK
+inference-1  | {'service': 'inference', 'event': 'http_request_in', 'method': 'GET', 'path': '/healthz'}
+inference-1  | INFO:     172.18.0.3:50958 - "GET /healthz HTTP/1.0" 200 OK
+inference-1  | {'service': 'inference', 'event': 'http_request_in', 'method': 'GET', 'path': '/healthz'}
+inference-1  | INFO:     172.18.0.3:50970 - "GET /healthz HTTP/1.0" 200 OK
+inference-1  | {'service': 'inference', 'event': 'http_request_in', 'method': 'GET', 'path': '/healthz'}
+inference-1  | INFO:     172.18.0.3:50986 - "GET /healthz HTTP/1.1" 200 OK
+inference-1  | {'service': 'inference', 'event': 'http_request_in', 'method': 'GET', 'path': '/ready'}
+inference-1  | INFO:     127.0.0.1:48166 - "GET /ready HTTP/1.1" 200 OK
+inference-1  | {'service': 'inference', 'event': 'http_request_in', 'method': 'GET', 'path': '/healthz'}
+inference-1  | INFO:     172.18.0.3:50988 - "GET /healthz HTTP/1.0" 200 OK
+inference-1  | {'service': 'inference', 'event': 'http_request_in', 'method': 'GET', 'path': '/healthz'}
+inference-1  | INFO:     172.18.0.3:50998 - "GET /healthz HTTP/1.0" 200 OK
+inference-1  | {'service': 'inference', 'event': 'http_request_in', 'method': 'GET', 'path': '/healthz'}
+inference-1  | INFO:     172.18.0.3:51014 - "GET /healthz HTTP/1.0" 200 OK
+inference-1  | {'service': 'inference', 'event': 'http_request_in', 'method': 'GET', 'path': '/healthz'}
+inference-1  | INFO:     172.18.0.3:51030 - "GET /healthz HTTP/1.1" 200 OK
+inference-1  | {'service': 'inference', 'event': 'http_request_in', 'method': 'GET', 'path': '/ready'}
+inference-1  | INFO:     127.0.0.1:48176 - "GET /ready HTTP/1.1" 200 OK
+inference-1  | {'service': 'inference', 'event': 'http_request_in', 'method': 'GET', 'path': '/healthz'}
+inference-1  | INFO:     172.18.0.3:40474 - "GET /healthz HTTP/1.0" 200 OK
+inference-1  | {'service': 'inference', 'event': 'http_request_in', 'method': 'GET', 'path': '/healthz'}
+inference-1  | INFO:     172.18.0.3:40478 - "GET /healthz HTTP/1.0" 200 OK
+inference-1  | {'service': 'inference', 'event': 'http_request_in', 'method': 'GET', 'path': '/healthz'}
+inference-1  | INFO:     172.18.0.3:40480 - "GET /healthz HTTP/1.1" 200 OK
+inference-1  | {'service': 'inference', 'event': 'http_request_in', 'method': 'GET', 'path': '/healthz'}
+inference-1  | INFO:     172.18.0.3:40482 - "GET /healthz HTTP/1.0" 200 OK
+inference-1  | {'service': 'inference', 'event': 'http_request_in', 'method': 'GET', 'path': '/ready'}
+inference-1  | INFO:     127.0.0.1:39392 - "GET /ready HTTP/1.1" 200 OK

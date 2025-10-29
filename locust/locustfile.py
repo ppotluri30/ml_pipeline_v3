@@ -9,7 +9,7 @@ Goal:
 Usage (from UI after `docker compose up -d locust`):
     Users: 25
     Spawn rate: 5
-    Host: http://inference:8000
+    Host: http://inference-lb
     Start swarming – watch /predict median, p95, p99.
 
 CSV Export: If you also want CSVs, launch Locust with `--csv /mnt/locust/results --csv-full-history` (compose command not modified here).
@@ -21,7 +21,7 @@ import posixpath
 from urllib.parse import urlsplit
 
 # NOTE: We intentionally removed earlier endpoint discovery complexity.
-# The host will be provided via the Locust UI as http://inference:8000.
+# The host will be provided via the Locust UI as http://inference-lb.
 # Tasks use relative paths so they follow the configured host.
 
 # --- Configuration via environment variables ---
@@ -32,8 +32,8 @@ GATEWAY_BASE = os.getenv("GATEWAY_BASE", "http://fastapi-app:8000")
 EP_DOWNLOAD = os.getenv("ENDPOINT_DOWNLOAD", f"{GATEWAY_BASE}/download/processed-data/test_processed_data.parquet")
 EP_DOWNLOAD_ALT = os.getenv("ENDPOINT_DOWNLOAD_ALT", f"{GATEWAY_BASE}/download/processed-data/processed_data.parquet")
 # Force absolute predict URL (remove ambiguity about host)
-RAW_PREDICT_URL = os.getenv("PREDICT_URL", "http://inference:8000/predict").strip() or "/predict"
-_target_host_env = (os.getenv("TARGET_HOST") or os.getenv("LOCUST_DEFAULT_HOST") or "http://inference:8000").strip()
+RAW_PREDICT_URL = os.getenv("PREDICT_URL", "http://inference-lb/predict").strip() or "/predict"
+_target_host_env = (os.getenv("TARGET_HOST") or os.getenv("LOCUST_DEFAULT_HOST") or "http://inference-lb").strip()
 
 if "://" not in RAW_PREDICT_URL:
     if "://" not in _target_host_env:
