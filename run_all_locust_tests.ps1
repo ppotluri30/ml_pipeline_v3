@@ -188,7 +188,7 @@ function Show-LiveStats {
         if ($aggregated) {
             $rps = [math]::Round($aggregated.current_rps, 2)
             $median = $aggregated.median_response_time
-            $p95 = $aggregated.ninetyfifth_response_time
+            $p95 = if ($aggregated.PSObject.Properties['response_time_percentile_0.95']) { $aggregated.'response_time_percentile_0.95' } else { $aggregated.avg_response_time }
             $requests = $aggregated.num_requests
             $failures = $aggregated.num_failures
             
@@ -275,15 +275,18 @@ function Run-SingleTest {
         return $null
     }
     
-    # Extract metrics
+    # Extract metrics with fallback for percentiles
+    $p95Value = if ($aggregated.PSObject.Properties['response_time_percentile_0.95']) { $aggregated.'response_time_percentile_0.95' } else { $aggregated.avg_response_time }
+    $p99Value = if ($aggregated.PSObject.Properties['response_time_percentile_0.99']) { $aggregated.'response_time_percentile_0.99' } else { $aggregated.max_response_time }
+    
     $result = [PSCustomObject]@{
         Replicas = $Replicas
         Workers = $Workers
         Users = $Users
         RPS = [math]::Round($aggregated.current_rps, 2)
         Median_ms = $aggregated.median_response_time
-        P95_ms = $aggregated.ninetyfifth_response_time
-        P99_ms = $aggregated.ninetyninth_response_time
+        P95_ms = $p95Value
+        P99_ms = $p99Value
         Failures_Pct = [math]::Round(($aggregated.num_failures / [math]::Max($aggregated.num_requests, 1)) * 100, 2)
         Total_Requests = $aggregated.num_requests
         Duration_s = $Duration
