@@ -17,7 +17,7 @@ MC_ENDPOINT=${MC_ENDPOINT:-http://minio:9000}
 MC_USER=${MC_USER:-minioadmin}
 MC_PASS=${MC_PASS:-minioadmin}
 RETRIES=${RETRIES:-60}        # Increased from 30 for slower cold boots
-SLEEP_SEC=${SLEEP_SEC:-2}
+SLEEP_SEC=${SLEEP_SEC:-2} 
 
 # Optional network diagnostics (DEBUG_MINIO_INIT=1 to enable verbose)
 if [ "${DEBUG_MINIO_INIT}" = "1" ]; then
