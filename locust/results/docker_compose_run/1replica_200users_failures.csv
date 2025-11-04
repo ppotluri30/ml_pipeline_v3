@@ -1,0 +1,4 @@
+Method,Name,Error,Occurrences
+GET,download_processed,"gaierror(-3, 'Temporary failure in name resolution')",2
+GET,healthz,RemoteDisconnected('Remote end closed connection without response'),1
+POST,predict,RemoteDisconnected('Remote end closed connection without response'),21

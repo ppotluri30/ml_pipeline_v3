@@ -182,6 +182,109 @@ Bring up everything (training will run as soon as preprocess publishes claim che
 docker compose up -d kafka minio postgres mlflow fastapi-app preprocess train_gru train_lstm nonml_prophet eval inference
 ```
 
+## Kubernetes / Helm Deployment
+
+For production deployments, use the provided Helm chart to deploy to Kubernetes clusters.
+
+### Prerequisites
+- Kubernetes cluster (v1.24+) - minikube, kind, or cloud provider (EKS, GKE, AKS)
+- Helm 3.8+ installed
+- kubectl configured to access your cluster
+
+### Quick Start (Development)
+
+```bash
+# 1. Deploy with development values (minimal resources, no persistence)
+helm install flts .helm/ \
+  -f .helm/values-complete.yaml \
+  -f .helm/values-dev.yaml
+
+# 2. Check deployment status
+kubectl get pods
+kubectl get svc
+
+# 3. Access services via port-forward
+# MLflow
+kubectl port-forward svc/mlflow 5000:5000
+
+# Inference API
+kubectl port-forward svc/inference-lb 8023:8023
+
+# Locust UI
+kubectl port-forward svc/locust-master 8089:8089
+
+# Grafana
+kubectl port-forward svc/grafana 3000:3000
+
+# 4. Monitor logs
+kubectl logs -f deployment/train-gru
+kubectl logs -f deployment/eval
+kubectl logs -f deployment/inference
+
+# 5. Run inference test
+kubectl run curl-test --image=curlimages/curl:8.10.1 --rm -it --restart=Never -- \
+  curl -X POST http://inference:8000/predict \
+  -H "Content-Type: application/json" \
+  -d "{}"
+```
+
+### Production Deployment
+
+```bash
+# Deploy with production values (HA, persistence, autoscaling)
+helm install flts-prod .helm/ \
+  -f .helm/values-complete.yaml \
+  -f .helm/values-prod.yaml \
+  --namespace flts-prod \
+  --create-namespace
+
+# Enable ingress for external access
+# Edit values-prod.yaml to configure ingress hosts and TLS
+
+# Monitor autoscaling
+kubectl get hpa inference-hpa -n flts-prod
+kubectl describe hpa inference-hpa -n flts-prod
+
+# Scale training manually if needed
+kubectl scale deployment train-gru --replicas=3 -n flts-prod
+```
+
+### Helm Chart Features
+- **Autoscaling**: HPA enabled for inference service (2-20 replicas)
+- **Monitoring**: Prometheus + Grafana with pre-configured dashboards
+- **Load Balancing**: HAProxy for inference traffic distribution
+- **Distributed Training**: Multiple trainer pods (GRU, LSTM, Prophet)
+- **Load Testing**: Locust master + workers for benchmarking
+- **Storage**: Persistent volumes for MinIO, Postgres, metrics
+- **Security**: ConfigMaps, Secrets, Pod Security Standards
+
+### Helm Commands Reference
+
+```bash
+# Validate chart before install
+helm lint .helm/ -f .helm/values-complete.yaml -f .helm/values-dev.yaml
+
+# Dry-run to preview manifests
+helm install flts .helm/ \
+  -f .helm/values-complete.yaml \
+  -f .helm/values-dev.yaml \
+  --dry-run --debug
+
+# Upgrade existing deployment
+helm upgrade flts .helm/ \
+  -f .helm/values-complete.yaml \
+  -f .helm/values-dev.yaml
+
+# Uninstall
+helm uninstall flts
+
+# View deployment status
+helm status flts
+helm list
+```
+
+For detailed Kubernetes deployment documentation, see [.helm/README.md](.helm/README.md).
+
 ## Key Artifacts & Buckets
 - Processed data: `processed-data/processed_data.parquet`, `processed-data/test_processed_data.parquet`
 - MLflow artifacts: `mlflow` bucket (model folder = `MODEL_TYPE`, scaler in `scaler/`)
@@ -262,3 +365,44 @@ docker compose down
 
 ---
 *Generated to document the current operational pipeline after removal of `preprocess_container_backup`.*
+
+
+🚀 Distributed Locust Load Testing Report — Updated Results
+
+Test Date: October 2025
+Test Duration: 60 seconds per configuration
+Total Runs: 24 (4 replica levels × 2 Locust worker tiers × 3 user tiers)
+
+⚙️ Test Setup
+
+Goal: Measure horizontal scalability and latency behavior of the inference service.
+
+Environment: Kafka / MinIO / MLflow / FastAPI + HAProxy Load Balancer.
+
+Parameters:
+
+Inference replicas: 1 → 2 → 4 → 8
+
+Locust workers: 4 and 8
+
+Concurrent users: 200 / 400 / 800
+
+📊 Throughput ( RPS ) and Scaling Trends
+Replicas	4 Workers – RPS (200 / 400 / 800 users)	8 Workers – RPS (200 / 400 / 800 users)	Observation
+1	39.8 / 31.1 / 33.4	36.8 / 35.3 / 36.3	Single container CPU-bound; baseline capacity ≈ 35 RPS
+2	57.2 / 60.3 / 60.7	54.9 / 72.8 / 61.8	~1.7 × gain vs 1 replica; latency halved
+4	88.2 / 98.8 / 100.2	58.2 / 102.2 / 108.7	Linear scaling through 4 replicas (~3 × throughput gain)
+8	86.5 / 82.3 / 82.8	58.9 / 111.8 / 122.7	Peak throughput ≈ 123 RPS; slight plateau sign of CPU saturation
+
+➡ Overall throughput gain: ≈ 3.5 × from 1 → 8 replicas
+➡ Highest observed throughput: 122.7 req/s @ 8 replicas, 8 workers, 800 users
+
+⏱️ Latency (P95) Summary
+Replicas	4 Workers – P95 (200 / 400 / 800 users ms)	8 Workers – P95 (200 / 400 / 800 users ms)	Comment
+1	5200 / 15000 / 24000	2600 / 8700 / 16000	High tail latency under load for single instance
+2	2700 / 7000 / 16000	530 / 5300 / 8800	Latency drops sharply once requests distributed
+4	1200 / 3800 / 12000	140 / 830 / 3700	Steady improvement with more replicas
+8	1100 / 4200 / 14000	100 / 420 / 2500	Best P95 ≈ 2500 ms under max load
+
+➡ Best overall P95: ≈ 100–140 ms at 8 replicas, 8 workers, 200 users
+➡ Tail latency drops > 10× from single replica baseline.

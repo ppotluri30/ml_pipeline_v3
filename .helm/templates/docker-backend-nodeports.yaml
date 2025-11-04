@@ -1,0 +1,98 @@
+{{- if .Values.externalBackend.enabled }}
+---
+# ClusterIP service to expose Docker MLflow to K8s pods
+# Maps to Docker host via manual Endpoints
+apiVersion: v1
+kind: Service
+metadata:
+  name: docker-mlflow-bridge
+  labels:
+    app.kubernetes.io/name: docker-mlflow-bridge
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: external-backend
+spec:
+  type: ClusterIP
+  clusterIP: None  # Headless service - uses endpoints directly
+  ports:
+    - port: 5000
+      targetPort: 5000
+      protocol: TCP
+      name: mlflow
+
+---
+# Endpoints for docker-mlflow-bridge pointing to Docker host
+apiVersion: v1
+kind: Endpoints
+metadata:
+  name: docker-mlflow-bridge
+subsets:
+  - addresses:
+      - ip: 192.168.65.254  # host.docker.internal IP
+    ports:
+      - port: 5000
+        name: mlflow
+
+---
+# ClusterIP service to expose Docker MinIO to K8s pods
+apiVersion: v1
+kind: Service
+metadata:
+  name: docker-minio-bridge
+  labels:
+    app.kubernetes.io/name: docker-minio-bridge
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: external-backend
+spec:
+  type: ClusterIP
+  clusterIP: None  # Headless service - uses endpoints directly
+  ports:
+    - port: 9000
+      targetPort: 9000
+      protocol: TCP
+      name: s3-api
+
+---
+# Endpoints for docker-minio-bridge pointing to Docker host
+apiVersion: v1
+kind: Endpoints
+metadata:
+  name: docker-minio-bridge
+subsets:
+  - addresses:
+      - ip: 192.168.65.254  # host.docker.internal IP
+    ports:
+      - port: 9000
+        name: s3-api
+
+---
+# ClusterIP service to expose Docker FastAPI to K8s pods
+apiVersion: v1
+kind: Service
+metadata:
+  name: docker-fastapi-bridge
+  labels:
+    app.kubernetes.io/name: docker-fastapi-bridge
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: external-backend
+spec:
+  type: ClusterIP
+  clusterIP: None  # Headless service - uses endpoints directly
+  ports:
+    - port: 8000
+      targetPort: 8000
+      protocol: TCP
+      name: gateway
+
+---
+# Endpoints for docker-fastapi-bridge pointing to Docker host
+apiVersion: v1
+kind: Endpoints
+metadata:
+  name: docker-fastapi-bridge
+subsets:
+  - addresses:
+      - ip: 192.168.65.254  # host.docker.internal IP
+    ports:
+      - port: 8000
+        name: gateway
+{{- end }}

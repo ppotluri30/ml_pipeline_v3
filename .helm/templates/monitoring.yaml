@@ -1,0 +1,408 @@
+{{- if .Values.inferenceLb.enabled | default true }}
+---
+# Inference Load Balancer Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: inference-lb
+  labels:
+    app.kubernetes.io/name: inference-lb
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: load-balancer
+spec:
+  type: {{ .Values.inferenceLb.service.type }}
+  ports:
+    - port: {{ .Values.inferenceLb.service.port }}
+      targetPort: 8023
+      protocol: TCP
+      name: http
+      {{- if and (eq .Values.inferenceLb.service.type "NodePort") .Values.inferenceLb.service.nodePort }}
+      nodePort: {{ .Values.inferenceLb.service.nodePort }}
+      {{- end }}
+  selector:
+    app.kubernetes.io/name: inference-lb
+    app.kubernetes.io/instance: {{ .Release.Name }}
+
+---
+# Inference Load Balancer ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: inference-lb-config
+  labels:
+    app.kubernetes.io/name: inference-lb
+    app.kubernetes.io/instance: {{ .Release.Name }}
+data:
+  haproxy.cfg: |
+    global
+      log stdout local0
+      maxconn 4096
+
+    defaults
+      log global
+      mode http
+      option httplog
+      option dontlognull
+      timeout connect 5s
+      timeout client 60s
+      timeout server 60s
+      timeout http-request 10s
+
+    frontend http_front
+      bind *:8023
+      default_backend inference_backend
+
+    backend inference_backend
+      balance roundrobin
+      option httpchk GET /healthz
+      http-check expect status 200
+      server-template inference- {{ .Values.inference.replicas }} inference:{{ .Values.inference.service.port }} check inter 5s fall 3 rise 2
+
+    listen stats
+      bind *:9000
+      stats enable
+      stats uri /stats
+      stats refresh 10s
+      stats admin if TRUE
+
+---
+# Inference Load Balancer Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: inference-lb
+  labels:
+    app.kubernetes.io/name: inference-lb
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: load-balancer
+spec:
+  replicas: {{ .Values.inferenceLb.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: inference-lb
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: inference-lb
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: load-balancer
+    spec:
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: haproxy
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.inferenceLb.image.repository }}:{{ .Values.inferenceLb.image.tag }}"
+          imagePullPolicy: {{ .Values.global.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8023
+              protocol: TCP
+            - name: stats
+              containerPort: 9000
+              protocol: TCP
+          volumeMounts:
+            - name: config
+              mountPath: /usr/local/etc/haproxy/haproxy.cfg
+              subPath: haproxy.cfg
+          resources:
+            requests:
+              cpu: "{{ .Values.inferenceLb.resources.requests.cpu }}"
+              memory: "{{ .Values.inferenceLb.resources.requests.memory }}"
+            limits:
+              cpu: "{{ .Values.inferenceLb.resources.limits.cpu }}"
+              memory: "{{ .Values.inferenceLb.resources.limits.memory }}"
+          livenessProbe:
+            httpGet:
+              path: /stats
+              port: 9000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /stats
+              port: 9000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+      volumes:
+        - name: config
+          configMap:
+            name: inference-lb-config
+{{- end }}
+
+{{- if .Values.prometheus.enabled | default true }}
+---
+# Prometheus Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+  labels:
+    app.kubernetes.io/name: prometheus
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: monitoring
+spec:
+  type: {{ .Values.prometheus.service.type }}
+  ports:
+    - port: {{ .Values.prometheus.service.port }}
+      targetPort: 9090
+      protocol: TCP
+      name: http
+      {{- if and (eq .Values.prometheus.service.type "NodePort") .Values.prometheus.service.nodePort }}
+      nodePort: {{ .Values.prometheus.service.nodePort }}
+      {{- end }}
+  selector:
+    app.kubernetes.io/name: prometheus
+    app.kubernetes.io/instance: {{ .Release.Name }}
+
+---
+# Prometheus ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  labels:
+    app.kubernetes.io/name: prometheus
+    app.kubernetes.io/instance: {{ .Release.Name }}
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: {{ .Values.prometheus.scrapeInterval }}
+      evaluation_interval: 15s
+
+    scrape_configs:
+      - job_name: 'inference'
+        static_configs:
+          - targets: ['inference:{{ .Values.inference.service.port }}']
+        metrics_path: '/metrics'
+
+      - job_name: 'inference-lb'
+        static_configs:
+          - targets: ['inference-lb:9000']
+        metrics_path: '/stats;csv'
+
+      - job_name: 'fastapi'
+        static_configs:
+          - targets: ['fastapi-app:{{ .Values.fastapi.service.port }}']
+        metrics_path: '/metrics'
+
+      - job_name: 'eval'
+        static_configs:
+          - targets: ['eval:{{ .Values.eval.service.port }}']
+        metrics_path: '/metrics'
+
+---
+# Prometheus Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+  labels:
+    app.kubernetes.io/name: prometheus
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: monitoring
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: prometheus
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: prometheus
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: monitoring
+    spec:
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: prometheus
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.prometheus.image.repository }}:{{ .Values.prometheus.image.tag }}"
+          imagePullPolicy: {{ .Values.global.pullPolicy }}
+          args:
+            - --config.file=/etc/prometheus/prometheus.yml
+            - --storage.tsdb.path=/prometheus
+            - --storage.tsdb.retention.time={{ .Values.prometheus.retention }}
+            - --web.console.libraries=/usr/share/prometheus/console_libraries
+            - --web.console.templates=/usr/share/prometheus/consoles
+          ports:
+            - name: http
+              containerPort: 9090
+              protocol: TCP
+          volumeMounts:
+            - name: config
+              mountPath: /etc/prometheus
+            - name: data
+              mountPath: /prometheus
+          resources:
+            requests:
+              cpu: "{{ .Values.prometheus.resources.requests.cpu }}"
+              memory: "{{ .Values.prometheus.resources.requests.memory }}"
+            limits:
+              cpu: "{{ .Values.prometheus.resources.limits.cpu }}"
+              memory: "{{ .Values.prometheus.resources.limits.memory }}"
+          livenessProbe:
+            httpGet:
+              path: /-/healthy
+              port: 9090
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: 9090
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 3
+      volumes:
+        - name: config
+          configMap:
+            name: prometheus-config
+        - name: data
+          {{- if .Values.prometheus.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: prometheus-data-pvc
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+{{- end }}
+
+{{- if .Values.grafana.enabled | default true }}
+---
+# Grafana Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  labels:
+    app.kubernetes.io/name: grafana
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: monitoring
+spec:
+  type: {{ .Values.grafana.service.type }}
+  ports:
+    - port: {{ .Values.grafana.service.port }}
+      targetPort: 3000
+      protocol: TCP
+      name: http
+      {{- if and (eq .Values.grafana.service.type "NodePort") .Values.grafana.service.nodePort }}
+      nodePort: {{ .Values.grafana.service.nodePort }}
+      {{- end }}
+  selector:
+    app.kubernetes.io/name: grafana
+    app.kubernetes.io/instance: {{ .Release.Name }}
+
+---
+# Grafana ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasources
+  labels:
+    app.kubernetes.io/name: grafana
+    app.kubernetes.io/instance: {{ .Release.Name }}
+data:
+  datasources.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        access: proxy
+        url: http://prometheus:{{ .Values.prometheus.service.port }}
+        isDefault: true
+        editable: true
+
+---
+# Grafana Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  labels:
+    app.kubernetes.io/name: grafana
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: monitoring
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: grafana
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: grafana
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: monitoring
+    spec:
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: grafana
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.grafana.image.repository }}:{{ .Values.grafana.image.tag }}"
+          imagePullPolicy: {{ .Values.global.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 3000
+              protocol: TCP
+          env:
+            - name: GF_SECURITY_ADMIN_USER
+              value: "{{ .Values.grafana.auth.adminUser }}"
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              value: "{{ .Values.grafana.auth.adminPassword }}"
+            - name: GF_INSTALL_PLUGINS
+              value: ""
+          volumeMounts:
+            - name: datasources
+              mountPath: /etc/grafana/provisioning/datasources
+            - name: data
+              mountPath: /var/lib/grafana
+          resources:
+            requests:
+              cpu: "{{ .Values.grafana.resources.requests.cpu }}"
+              memory: "{{ .Values.grafana.resources.requests.memory }}"
+            limits:
+              cpu: "{{ .Values.grafana.resources.limits.cpu }}"
+              memory: "{{ .Values.grafana.resources.limits.memory }}"
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 3000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+      volumes:
+        - name: datasources
+          configMap:
+            name: grafana-datasources
+        - name: data
+          {{- if .Values.grafana.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: grafana-data-pvc
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+{{- end }}

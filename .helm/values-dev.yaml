@@ -1,0 +1,153 @@
+# Development environment overrides
+# Lower resource limits, fewer replicas, enable debugging
+
+global:
+  identifier: "dev"
+  pullPolicy: IfNotPresent  # Use local images when available
+  storageClass: "hostpath"  # Docker Desktop default storage class
+
+kafka:
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "250m"
+    limits:
+      memory: "1Gi"
+      cpu: "500m"
+
+minio:
+  persistence:
+    size: "5Gi"
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "512Mi"
+      cpu: "250m"
+
+postgres:
+  persistence:
+    size: "2Gi"
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "512Mi"
+      cpu: "250m"
+
+mlflow:
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "512Mi"
+      cpu: "250m"
+
+# Preprocess with sampling for fast iteration
+preprocess:
+  env:
+    sampleTrainRows: "50"
+    sampleTestRows: "30"
+    sampleStrategy: "head"
+    sampleSeed: "45"
+    forceReprocess: "1"
+
+train:
+  gru:
+    replicas: 1
+    env:
+      epochs: 5  # Faster training for dev
+      # Sampling for very fast training
+      sampleTrainRows: "50"
+      sampleTestRows: "30"
+      sampleStrategy: "head"
+      sampleSeed: "45"
+    resources:
+      requests:
+        memory: "1Gi"
+        cpu: "500m"
+      limits:
+        memory: "2Gi"
+        cpu: "1000m"
+  
+  lstm:
+    replicas: 1
+    env:
+      epochs: 5
+      # Sampling for very fast training
+      sampleTrainRows: "50"
+      sampleTestRows: "30"
+      sampleStrategy: "head"
+      sampleSeed: "45"
+    resources:
+      requests:
+        memory: "1Gi"
+        cpu: "500m"
+      limits:
+        memory: "2Gi"
+        cpu: "1000m"
+
+nonml:
+  prophet:
+    env:
+      # Sampling for very fast training
+      sampleTrainRows: "50"
+      sampleTestRows: "30"
+      sampleStrategy: "head"
+      sampleSeed: "45"
+    resources:
+      requests:
+        memory: "512Mi"
+        cpu: "250m"
+      limits:
+        memory: "1Gi"
+        cpu: "500m"
+
+inference:
+  replicas: 2  # Start with 2 replicas for native K8s load balancing
+  service:
+    type: NodePort  # Expose for external access
+    nodePort: 30080  # Fixed port for easy access
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "250m"
+    limits:
+      memory: "1Gi"
+      cpu: "500m"
+  autoscaling:
+    enabled: true  # Enable HPA for testing
+    minReplicas: 2
+    maxReplicas: 8
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 75
+
+# Disable HAProxy load balancer (using native K8s load balancing)
+inferenceLb:
+  enabled: false
+
+prometheus:
+  persistence:
+    enabled: false
+
+grafana:
+  persistence:
+    enabled: false
+
+# Disable Locust for now (locustfile not mounted issue)
+locust:
+  enabled: false
+  targetHost: "inference"  # Target inference service directly
+  targetPort: 8000  # Inference app port (not HAProxy)
+  master:
+    env:
+      predictUrl: "http://inference:8000/predict"
+      targetHost: "http://inference:8000"
+  worker:
+    replicas: 2  # Fewer workers for dev
+
+ingress:
+  enabled: false  # Use port-forward or NodePort in dev

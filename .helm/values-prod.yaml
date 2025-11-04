@@ -1,0 +1,204 @@
+# Production environment overrides
+# Higher resources, multiple replicas, security hardening
+
+global:
+  identifier: "prod"
+  pullPolicy: IfNotPresent
+  storageClass: "ssd-retain"  # Use fast, persistent storage
+
+kafka:
+  replicas: 3  # Cluster for HA
+  resources:
+    requests:
+      memory: "2Gi"
+      cpu: "1000m"
+    limits:
+      memory: "4Gi"
+      cpu: "2000m"
+
+minio:
+  persistence:
+    size: "100Gi"
+    storageClass: "ssd-retain"
+  resources:
+    requests:
+      memory: "1Gi"
+      cpu: "500m"
+    limits:
+      memory: "2Gi"
+      cpu: "1000m"
+  auth:
+    # Use Kubernetes secrets in production
+    existingSecret: "minio-credentials"
+
+postgres:
+  persistence:
+    size: "50Gi"
+    storageClass: "ssd-retain"
+  resources:
+    requests:
+      memory: "2Gi"
+      cpu: "1000m"
+    limits:
+      memory: "4Gi"
+      cpu: "2000m"
+  auth:
+    existingSecret: "postgres-credentials"
+
+mlflow:
+  resources:
+    requests:
+      memory: "1Gi"
+      cpu: "500m"
+    limits:
+      memory: "2Gi"
+      cpu: "1000m"
+
+train:
+  gru:
+    replicas: 2  # Parallel training
+    env:
+      epochs: 50
+    resources:
+      requests:
+        memory: "4Gi"
+        cpu: "2000m"
+      limits:
+        memory: "8Gi"
+        cpu: "4000m"
+  
+  lstm:
+    replicas: 2
+    env:
+      epochs: 50
+    resources:
+      requests:
+        memory: "4Gi"
+        cpu: "2000m"
+      limits:
+        memory: "8Gi"
+        cpu: "4000m"
+
+nonml:
+  prophet:
+    replicas: 1
+    resources:
+      requests:
+        memory: "2Gi"
+        cpu: "1000m"
+      limits:
+        memory: "4Gi"
+        cpu: "2000m"
+
+eval:
+  replicas: 1
+  resources:
+    requests:
+      memory: "1Gi"
+      cpu: "500m"
+    limits:
+      memory: "2Gi"
+      cpu: "1000m"
+
+inference:
+  replicas: 4  # Multiple replicas for load
+  resources:
+    requests:
+      memory: "2Gi"
+      cpu: "1000m"
+    limits:
+      memory: "4Gi"
+      cpu: "2000m"
+  autoscaling:
+    enabled: true
+    minReplicas: 4
+    maxReplicas: 20
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 75
+
+inferenceLb:
+  service:
+    type: LoadBalancer
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "200m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+
+prometheus:
+  persistence:
+    enabled: true
+    size: "20Gi"
+    storageClass: "ssd-retain"
+  resources:
+    requests:
+      memory: "2Gi"
+      cpu: "1000m"
+    limits:
+      memory: "4Gi"
+      cpu: "2000m"
+
+grafana:
+  persistence:
+    enabled: true
+    size: "5Gi"
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "250m"
+    limits:
+      memory: "1Gi"
+      cpu: "500m"
+  auth:
+    existingSecret: "grafana-credentials"
+
+locust:
+  worker:
+    replicas: 8
+
+ingress:
+  enabled: true
+  className: "nginx"
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+  hosts:
+    - host: mlflow.prod.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+          service: mlflow
+          port: 5000
+    - host: grafana.prod.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+          service: grafana
+          port: 3000
+    - host: api.prod.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+          service: inference-lb
+          port: 80
+  tls:
+    - secretName: flts-tls-prod
+      hosts:
+        - mlflow.prod.example.com
+        - grafana.prod.example.com
+        - api.prod.example.com
+
+# Security: Use Pod Security Standards
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 2000
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: false  # Some apps need writable filesystem

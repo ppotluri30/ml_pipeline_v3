@@ -73,17 +73,27 @@ def _enrich_loaded_model(service: Inferencer, run_id: str, model_type_hint: str 
 # --- Helper: Robust JSON extraction (supports multipart/form-data wrappers) ---
 def _extract_json_from_raw(raw: bytes | str):  # returns tuple(success_bool, payload_dict_or_none, debug_message)
     try:
+        # Handle None or empty input
+        if raw is None:
+            return False, None, 'raw_input_is_none'
+        
         if isinstance(raw, (bytes, bytearray)):
+            if len(raw) == 0:
+                return False, None, 'raw_bytes_empty'
             text = raw.decode('utf-8', errors='ignore')
         else:
-            text = raw
+            text = raw if raw else ''
+            if not text:
+                return False, None, 'raw_string_empty'
+        
         # First fast path: direct JSON
         try:
             return True, _json.loads(text), 'direct'
         except Exception:
             pass
+        
         # Detect multipart boundary markers
-        if 'Content-Disposition:' in text and '--' in text.splitlines()[0]:
+        if text and 'Content-Disposition:' in text and '--' in text.splitlines()[0]:
             # Heuristic: extract the largest JSON bracket section
             start = text.find('{')
             end = text.rfind('}')
@@ -104,6 +114,7 @@ def _extract_json_from_raw(raw: bytes | str):  # returns tuple(success_bool, pay
                 except Exception:
                     continue
             return False, None, 'multipart_detected_no_json'
+        
         # Fallback generic brace search even if not multipart (maybe trailing headers)
         start = text.find('{')
         end = text.rfind('}')
@@ -590,6 +601,9 @@ def _attempt_load_promoted(service: Inferencer):
         for key in candidate_keys:
             try:
                 obj = get_file(service.gateway_url, promotion_bucket, key)
+                if obj is None:
+                    print({"service": "inference", "event": "promotion_pointer_fetch_fail", "object_key": key, "error": "get_file returned None"})
+                    continue
                 raw = obj.getvalue() if hasattr(obj, 'getvalue') else obj
                 ok, payload, mode = _extract_json_from_raw(raw)
                 if ok and isinstance(payload, dict):
@@ -675,6 +689,9 @@ def _load_promoted_pointer(service: Inferencer):
     for key in candidates:
         try:
             obj = get_file(service.gateway_url, promotion_bucket, key)  # type: ignore[name-defined]
+            if obj is None:
+                print({"service": "inference", "event": "promotion_pointer_fetch_fail", "object_key": key, "error": "get_file returned None"})
+                continue
             raw = obj.getvalue() if hasattr(obj, 'getvalue') else obj
             ok, payload, mode = _extract_json_from_raw(raw)
             if ok and isinstance(payload, dict):

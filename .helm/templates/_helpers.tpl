@@ -60,3 +60,58 @@ Create the name of the service account to use
 {{- default "default" .Values.serviceAccount.name }}
 {{- end }}
 {{- end }}
+
+{{/*
+Get MLflow tracking URI - uses external backend if enabled, otherwise in-cluster service
+*/}}
+{{- define "chart.mlflowTrackingUri" -}}
+{{- if .Values.externalBackend.enabled }}
+{{- .Values.externalBackend.mlflow.trackingUri }}
+{{- else }}
+{{- printf "http://mlflow:%v" .Values.mlflow.service.port }}
+{{- end }}
+{{- end }}
+
+{{/*
+Get MinIO endpoint URL - uses external backend if enabled, otherwise in-cluster service
+*/}}
+{{- define "chart.minioEndpoint" -}}
+{{- if .Values.externalBackend.enabled }}
+{{- .Values.externalBackend.minio.endpoint }}
+{{- else }}
+{{- printf "http://minio:%v" .Values.minio.service.apiPort }}
+{{- end }}
+{{- end }}
+
+{{/*
+Get MinIO access key - uses external backend if enabled, otherwise in-cluster config
+*/}}
+{{- define "chart.minioAccessKey" -}}
+{{- if .Values.externalBackend.enabled }}
+{{- .Values.externalBackend.minio.accessKey }}
+{{- else }}
+{{- .Values.minio.auth.accessKey }}
+{{- end }}
+{{- end }}
+
+{{/*
+Get MinIO secret key - uses external backend if enabled, otherwise in-cluster config
+*/}}
+{{- define "chart.minioSecretKey" -}}
+{{- if .Values.externalBackend.enabled }}
+{{- .Values.externalBackend.minio.secretKey }}
+{{- else }}
+{{- .Values.minio.auth.secretKey }}
+{{- end }}
+{{- end }}
+
+{{/*
+Get FastAPI gateway URL - uses external backend if enabled, otherwise in-cluster service
+*/}}
+{{- define "chart.gatewayUrl" -}}
+{{- if .Values.externalBackend.enabled }}
+{{- .Values.externalBackend.fastapi.gatewayUrl }}
+{{- else }}
+{{- printf "http://fastapi-app:%v" .Values.fastapi.service.port }}
+{{- end }}
+{{- end }}

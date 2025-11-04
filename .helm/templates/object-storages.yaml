@@ -10,7 +10,7 @@ metadata:
 spec:
   type: ClusterIP
   ports:
-    - port: {{ .Values.mlflow.postgres.service.port }}
+    - port: {{ .Values.postgres.service.port }}
       targetPort: 5432
       protocol: TCP
       name: postgres
@@ -53,18 +53,18 @@ spec:
               protocol: TCP
           env:
             - name: POSTGRES_USER
-              value: "{{ .Values.mlflow.postgres.auth.user }}"
+              value: "{{ .Values.postgres.auth.username }}"
             - name: POSTGRES_PASSWORD
-              value: "{{ .Values.mlflow.postgres.auth.password }}"
+              value: "{{ .Values.postgres.auth.password }}"
             - name: POSTGRES_DB
-              value: "{{ .Values.mlflow.postgres.auth.database }}"
+              value: "{{ .Values.postgres.auth.database }}"
           resources:
             requests:
-              memory: "{{ .Values.mlflow.postgres.resources.requests.memory }}"
-              cpu: "{{ .Values.mlflow.postgres.resources.requests.cpu }}"
+              memory: "{{ .Values.postgres.resources.requests.memory }}"
+              cpu: "{{ .Values.postgres.resources.requests.cpu }}"
             limits:
-              memory: "{{ .Values.mlflow.postgres.resources.limits.memory }}"
-              cpu: "{{ .Values.mlflow.postgres.resources.limits.cpu }}"
+              memory: "{{ .Values.postgres.resources.limits.memory }}"
+              cpu: "{{ .Values.postgres.resources.limits.cpu }}"
           volumeMounts:
             - name: postgres-data
               mountPath: /var/lib/postgresql/data
@@ -73,9 +73,9 @@ spec:
               command:
                 - pg_isready
                 - -U
-                - "{{ .Values.mlflow.postgres.auth.user }}"
+                - "{{ .Values.postgres.auth.username }}"
                 - -d
-                - "{{ .Values.mlflow.postgres.auth.database }}"
+                - "{{ .Values.postgres.auth.database }}"
             initialDelaySeconds: 30
             periodSeconds: 10
             timeoutSeconds: 5
@@ -85,9 +85,9 @@ spec:
               command:
                 - pg_isready
                 - -U
-                - "{{ .Values.mlflow.postgres.auth.user }}"
+                - "{{ .Values.postgres.auth.username }}"
                 - -d
-                - "{{ .Values.mlflow.postgres.auth.database }}"
+                - "{{ .Values.postgres.auth.database }}"
             initialDelaySeconds: 5
             periodSeconds: 10
             timeoutSeconds: 5
@@ -109,14 +109,20 @@ metadata:
     app.kubernetes.io/name: minio
     app.kubernetes.io/instance: {{ .Release.Name }}
 spec:
-  type: ClusterIP
+  type: {{ .Values.minio.service.type | default "ClusterIP" }}
   ports:
     - port: {{ .Values.minio.service.apiPort }}
       targetPort: 9000
+      {{- if and (eq (.Values.minio.service.type | default "ClusterIP") "NodePort") .Values.minio.service.nodePort }}
+      nodePort: {{ .Values.minio.service.nodePort }}
+      {{- end }}
       protocol: TCP
       name: api
     - port: {{ .Values.minio.service.consolePort }}
       targetPort: 9001
+      {{- if and (eq (.Values.minio.service.type | default "ClusterIP") "NodePort") .Values.minio.service.consoleNodePort }}
+      nodePort: {{ .Values.minio.service.consoleNodePort }}
+      {{- end }}
       protocol: TCP
       name: console
   selector:
@@ -260,10 +266,13 @@ metadata:
     app.kubernetes.io/name: mlflow
     app.kubernetes.io/instance: {{ .Release.Name }}
 spec:
-  type: ClusterIP
+  type: {{ .Values.mlflow.service.type | default "ClusterIP" }}
   ports:
     - port: {{ .Values.mlflow.service.port }}
       targetPort: 5000
+      {{- if and (eq (.Values.mlflow.service.type | default "ClusterIP") "NodePort") .Values.mlflow.service.nodePort }}
+      nodePort: {{ .Values.mlflow.service.nodePort }}
+      {{- end }}
       protocol: TCP
       name: mlflow
   selector:
@@ -300,7 +309,7 @@ spec:
             - sh
             - -c
             - |
-              until pg_isready -h mlflow-postgres -p 5432 -U {{ .Values.mlflow.postgres.auth.user }}; do
+              until pg_isready -h mlflow-postgres -p 5432 -U {{ .Values.postgres.auth.username }}; do
                 echo "Waiting for postgres..."
                 sleep 2
               done

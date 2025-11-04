@@ -129,6 +129,15 @@ def message_handler():
                     scaler = subset_scaler(scaler, df.columns.to_list(), TRIMS) if scaler else None
                     df.drop(columns=df.columns.difference(TRIMS + TIME_FEATURES), inplace=True)
                 _jlog("download_done", rows=len(df), cols=len(df.columns), config_hash=md.get('config_hash'))
+                
+                # Prophet requires DatetimeIndex - ensure timestamp is set as index
+                if 'timestamp' in df.columns and not isinstance(df.index, pd.DatetimeIndex):
+                    try:
+                        df['timestamp'] = pd.to_datetime(df['timestamp'])
+                        df = df.set_index('timestamp')
+                        _jlog("datetime_index_set", df_rows=len(df))
+                    except Exception as dt_err:
+                        _jlog("datetime_index_set_failed", error=str(dt_err))
             except Exception as e:  # noqa: BLE001
                 _jlog("download_fail", error=str(e), object_key=object_key)
                 fc = _failure_counts.get(object_key, 0) + 1

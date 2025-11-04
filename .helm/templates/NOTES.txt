@@ -1,6 +1,13 @@
-1. Get the application URLs by running these commands:
+FLTS ML Pipeline Deployment - {{ .Chart.Name }} v{{ .Chart.Version }}
+
+✓ Installation complete!
+
+=============================================================================
+ACCESSING SERVICES
+=============================================================================
 
 {{- if .Values.ingress.enabled }}
+External Access (via Ingress):
 {{- range $host := .Values.ingress.hosts }}
   {{- range .paths }}
   http{{ if $.Values.ingress.tls }}s{{ end }}://{{ $host.host }}{{ .path }}
@@ -8,67 +15,83 @@
 {{- end }}
 {{- else }}
 
-Druid Services:
-{{- if .Values.druid.enabled }}
-  Druid Router (Web Console):
-  kubectl port-forward svc/druid-router {{ .Values.druid.services.router.port }}:{{ .Values.druid.services.router.port }}
-  Access at: http://127.0.0.1:{{ .Values.druid.services.router.port }}
-{{- end }}
+Use kubectl port-forward to access services:
 
-{{- if .Values.druid.enabled }}
-  Druid Coordinator:
-  kubectl port-forward svc/druid-coordinator {{ .Values.druid.services.coordinator.port }}:{{ .Values.druid.services.coordinator.port }}
-  Access at: http://127.0.0.1:{{ .Values.druid.services.coordinator.port }}
-{{- end }}
-
-ML Platform Services:
-{{- if .Values.mlflow.enabled }}
-  MLflow:
-  kubectl port-forward svc/mlflow {{ .Values.mlflow.service.port }}:{{ .Values.mlflow.service.port }}
-  Access at: http://127.0.0.1:{{ .Values.mlflow.service.port }}
-{{- end }}
-
-{{- if .Values.superset.enabled }}
-  Apache Superset:
-  kubectl port-forward svc/superset {{ .Values.superset.service.port }}:{{ .Values.superset.service.port }}
-  Access at: http://127.0.0.1:{{ .Values.superset.service.port }}
-  Default login: admin / admin
-{{- end }}
-
-{{- if .Values.minio.enabled }}
+Infrastructure:
+  Kafka:
+    kubectl port-forward svc/kafka {{ .Values.kafka.service.port }}:{{ .Values.kafka.service.port }}
+  
   MinIO Console:
-  kubectl port-forward svc/minio {{ .Values.minio.service.consolePort }}:{{ .Values.minio.service.consolePort }}
-  Access at: http://127.0.0.1:{{ .Values.minio.service.consolePort }}
-  Credentials: {{ .Values.minio.auth.accessKey }} / {{ .Values.minio.auth.secretKey }}
-{{- end }}
+    kubectl port-forward svc/minio {{ .Values.minio.service.consolePort }}:{{ .Values.minio.service.consolePort }}
+    Access at: http://127.0.0.1:{{ .Values.minio.service.consolePort }}
+    Credentials: {{ .Values.minio.auth.accessKey }} / {{ .Values.minio.auth.secretKey }}
 
-Application Services:
-{{- if .Values.fastapi.enabled }}
+ML Platform:
+  MLflow:
+    kubectl port-forward svc/mlflow {{ .Values.mlflow.service.port }}:{{ .Values.mlflow.service.port }}
+    Access at: http://127.0.0.1:{{ .Values.mlflow.service.port }}
+  
   FastAPI Gateway:
-  kubectl port-forward svc/fastapi-app {{ .Values.fastapi.service.port }}:{{ .Values.fastapi.service.port }}
-  Access at: http://127.0.0.1:{{ .Values.fastapi.service.port }}
+    kubectl port-forward svc/fastapi-app {{ .Values.fastapi.service.port }}:{{ .Values.fastapi.service.port }}
+    Access at: http://127.0.0.1:{{ .Values.fastapi.service.port }}
+
+Inference:
+  Inference Service:
+    kubectl port-forward svc/inference {{ .Values.inference.service.port }}:{{ .Values.inference.service.port }}
+    Access at: http://127.0.0.1:{{ .Values.inference.service.port }}
+  
+  Inference Load Balancer:
+    kubectl port-forward svc/inference-lb {{ .Values.inferenceLb.service.port }}:{{ .Values.inferenceLb.service.port }}
+    Access at: http://127.0.0.1:{{ .Values.inferenceLb.service.port }}
+
+{{- if .Values.eval.enabled | default true }}
+  Evaluation Service:
+    kubectl port-forward svc/eval {{ .Values.eval.service.port }}:{{ .Values.eval.service.port }}
+    Access at: http://127.0.0.1:{{ .Values.eval.service.port }}/readyz
+{{- end }}
+
+Monitoring:
+{{- if .Values.prometheus.enabled | default true }}
+  Prometheus:
+    kubectl port-forward svc/prometheus {{ .Values.prometheus.service.port }}:{{ .Values.prometheus.service.port }}
+    Access at: http://127.0.0.1:{{ .Values.prometheus.service.port }}
+{{- end }}
+
+{{- if .Values.grafana.enabled | default true }}
+  Grafana:
+    kubectl port-forward svc/grafana {{ .Values.grafana.service.port }}:{{ .Values.grafana.service.port }}
+    Access at: http://127.0.0.1:{{ .Values.grafana.service.port }}
+    Default login: {{ .Values.grafana.auth.adminUser }} / {{ .Values.grafana.auth.adminPassword }}
+{{- end }}
+
+Load Testing:
+{{- if .Values.locust.enabled | default true }}
+  Locust Master:
+    kubectl port-forward svc/locust-master 8089:8089
+    Access at: http://127.0.0.1:8089
 {{- end }}
 
 {{- end }}
 
-2. Check the status of your deployment:
-  kubectl get pods -l app.kubernetes.io/instance={{ .Release.Name }}
+=============================================================================
+NEXT STEPS
+=============================================================================
 
-3. Monitor logs:
-  kubectl logs -f deployment/druid-coordinator
-  kubectl logs -f deployment/kafka
+1. Check all pods are running:
+   kubectl get pods
 
-4. To scale services:
-  kubectl scale deployment druid-broker --replicas=2
+2. View logs for a specific service:
+   kubectl logs -f deployment/<service-name>
 
-5. Storage information:
-{{- if .Values.persistence.enabled }}
-  Persistent volumes have been created for data persistence.
-  To see storage usage:
-  kubectl get pvc -l app.kubernetes.io/instance={{ .Release.Name }}
-{{- else }}
-  WARNING: Persistence is disabled. Data will be lost when pods are restarted.
-{{- end }}
+3. Monitor training progress:
+   kubectl logs -f deployment/train-gru
+   kubectl logs -f deployment/train-lstm
 
-For more information, visit the documentation or check the deployment status with:
-  kubectl get all -l app.kubernetes.io/instance={{ .Release.Name }}
+4. Check inference scaling (if HPA enabled):
+   kubectl get hpa inference-hpa
+
+5. Run a load test:
+   # Access Locust UI and start a test
+   kubectl port-forward svc/locust-master 8089:8089
+
+For more information, visit: {{ .Chart.Home }}

@@ -1,0 +1,73 @@
+{{- if .Values.minio.initJob.enabled }}
+---
+# MinIO Initialization Job
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: minio-init-{{ randAlphaNum 5 | lower }}
+  labels:
+    app.kubernetes.io/name: minio-init
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: initialization
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: minio-init
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      initContainers:
+        - name: wait-for-minio
+          image: busybox:1.35
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z minio {{ .Values.minio.service.apiPort }}; do
+                echo "Waiting for MinIO..."
+                sleep 3
+              done
+              echo "MinIO is ready"
+      containers:
+        - name: mc
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: minio/mc:RELEASE.2024-10-08T09-37-26Z
+          imagePullPolicy: {{ .Values.global.pullPolicy }}
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              echo "Configuring mc client..."
+              mc alias set minio http://minio:{{ .Values.minio.service.apiPort }} {{ .Values.minio.auth.accessKey }} {{ .Values.minio.auth.secretKey }}
+              
+              echo "Creating buckets..."
+              {{- range .Values.minio.initJob.buckets }}
+              mc mb --ignore-existing minio/{{ . }}
+              echo "✓ Bucket {{ . }} created or already exists"
+              {{- end }}
+              
+              echo "Setting bucket policies to public..."
+              {{- range .Values.minio.initJob.buckets }}
+              mc anonymous set download minio/{{ . }}
+              {{- end }}
+              
+              echo "Bucket initialization complete!"
+              mc ls minio/
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "200m"
+              memory: "256Mi"
+      restartPolicy: OnFailure
+  backoffLimit: 5
+{{- end }}

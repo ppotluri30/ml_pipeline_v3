@@ -1,0 +1,631 @@
+# Complete values file for FLTS ML Pipeline Helm Chart
+# Aligned with docker-compose.yaml configuration
+
+# External Backend Configuration
+# Set to false to deploy all backend services in-cluster (MLflow, MinIO, Postgres, FastAPI)
+externalBackend:
+  enabled: false  # Deploy backend services in Kubernetes cluster
+  mlflow:
+    host: "mlflow"
+    port: 5000
+    trackingUri: "http://mlflow:5000"
+  minio:
+    host: "minio"
+    port: 9000
+    endpoint: "http://minio:9000"
+    accessKey: "minioadmin"
+    secretKey: "minioadmin"
+  fastapi:
+    host: "fastapi-app"
+    port: 8000
+    gatewayUrl: "http://fastapi-app:8000"
+
+global:
+  storageClass: "hostpath"  # Docker Desktop uses hostpath storage class
+  pullPolicy: IfNotPresent  # Use IfNotPresent for local images
+  imageRegistry: ""  # Set to your registry if using private images
+  identifier: "default"  # Override with deployment-specific identifier
+
+# Kafka - Message broker for pipeline events
+kafka:
+  enabled: true
+  image:
+    repository: apache/kafka
+    tag: "3.9.1"
+  service:
+    type: ClusterIP
+    port: 9092
+    controllerPort: 9093
+  replicas: 1
+  config:
+    nodeId: 1
+    replicationFactor: 1
+    groupInitialRebalanceDelayMs: 0
+  resources:
+    requests:
+      memory: "1Gi"
+      cpu: "500m"
+    limits:
+      memory: "2Gi"
+      cpu: "1000m"
+  healthcheck:
+    enabled: true
+    interval: 10s
+    timeout: 5s
+    retries: 5
+
+# MinIO - S3-compatible object storage  
+minio:
+  enabled: true  # Deploy MinIO in Kubernetes cluster
+  image:
+    repository: minio/minio
+    tag: "latest"
+  service:
+    type: NodePort  # Expose via NodePort for direct host access
+    apiPort: 9000
+    consolePort: 9001
+    nodePort: 30900      # Direct access at http://localhost:30900
+    consoleNodePort: 30901  # Console at http://localhost:30901
+  auth:
+    accessKey: "minioadmin"
+    secretKey: "minioadmin"  # CHANGE IN PRODUCTION
+  persistence:
+    enabled: true  # Enable persistence for data durability
+    size: "20Gi"
+    storageClass: ""  # Uses global.storageClass if empty
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "250m"
+    limits:
+      memory: "1Gi"
+      cpu: "500m"
+  
+  # MinIO initialization job - creates required buckets
+  initJob:
+    enabled: true  # Enable bucket initialization
+    image:
+      repository: minio/mc
+      tag: "latest"
+    buckets:
+      - "dataset"
+      - "processed-data"
+      - "mlflow"
+      - "model-promotion"
+      - "inference-logs"
+    restartPolicy: OnFailure
+
+# PostgreSQL - MLflow backend store
+postgres:
+  enabled: true  # Deploy Postgres in Kubernetes cluster
+  image:
+    repository: postgres
+    tag: "13"
+  service:
+    type: ClusterIP
+    port: 5432
+  auth:
+    username: "mlflow"
+    password: "mlflow"  # CHANGE IN PRODUCTION
+    database: "mlflow"
+  persistence:
+    enabled: true  # Enable persistence for MLflow metadata
+    size: "10Gi"
+    storageClass: ""
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "250m"
+    limits:
+      memory: "1Gi"
+      cpu: "500m"
+  healthcheck:
+    enabled: true
+    interval: 10s
+    timeout: 5s
+    retries: 5
+
+# MLflow - Experiment tracking and model registry
+mlflow:
+  enabled: true  # Deploy MLflow in Kubernetes cluster
+  image:
+    repository: mlflow
+    tag: "latest"
+    pullPolicy: IfNotPresent
+  service:
+    type: NodePort  # Expose via NodePort for direct host access
+    port: 5000
+    nodePort: 30500  # Direct access at http://localhost:30500
+  env:
+    backendStoreUri: "postgresql://mlflow:mlflow@postgres:5432/mlflow"
+    defaultArtifactRoot: "s3://mlflow"
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "250m"
+    limits:
+      memory: "1Gi"
+      cpu: "500m"
+
+# FastAPI Gateway - S3 proxy and file gateway
+fastapi:
+  enabled: true  # Deploy FastAPI in Kubernetes cluster
+  image:
+    repository: fastapi-app
+    tag: "latest"
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP  # Internal only
+    port: 8000
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+
+# EDA - Exploratory Data Analysis service
+eda:
+  enabled: false  # Disabled for unified backend deployment
+  image:
+    repository: eda
+    tag: "latest"
+  service:
+    type: ClusterIP
+    port: 8010
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "512Mi"
+      cpu: "200m"
+
+# Preprocess - Data preprocessing pipeline
+preprocess:
+  enabled: true
+  image:
+    repository: preprocess
+    tag: "latest"
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 8020
+  env:
+    datasetName: "PobleSec"
+    sampleTrainRows: "50"  # Reduced for fast training (aligned with Docker)
+    sampleTestRows: "50"   # Reduced for fast training (aligned with Docker)
+    sampleStrategy: "head" # Take first N rows
+    sampleSeed: "42"       # Reproducible sampling (aligned with Docker)
+    forceReprocess: "1"    # Always reprocess with new samples
+    extraHashSalt: "v3_full_in_cluster_backend"
+    configPath: "/app/config.json"
+  kafka:
+    producerTopics:
+      - "training-data"
+      - "inference-data"
+  resources:
+    requests:
+      memory: "1Gi"
+      cpu: "500m"
+    limits:
+      memory: "2Gi"
+      cpu: "1000m"
+
+# Training services - Multiple model types
+train:
+  # Base training service (disabled by default, use specific trainers below)
+  enabled: false
+  
+  # GRU Trainer
+  gru:
+    enabled: true
+    image:
+      repository: train
+      tag: "latest"
+      pullPolicy: IfNotPresent
+    replicas: 1
+    kafka:
+      consumerTopic: "training-data"
+      consumerGroupId: "train-gru"
+      producerTopic: "model-training"
+    env:
+      modelType: "GRU"
+      trainTestSplit: 0.8
+      inputSeqLen: 10
+      outputSeqLen: 1
+      hiddenSize: 128
+      numLayers: 2
+      batchSize: 64
+      epochs: 5  # Reduced from 10 for faster training
+      earlyStopping: "True"
+      patience: 30
+      learningRate: "1e-4"
+      failureMaxRetries: 3
+      enableXai: "false"
+      skipDuplicateConfigs: "1"
+      dupCacheMax: "500"
+      # NOTE: Sampling happens in preprocess, NOT in training containers
+      # Training consumes pre-sampled data directly from MinIO
+    resources:
+      requests:
+        memory: "2Gi"
+        cpu: "1000m"
+      limits:
+        memory: "4Gi"
+        cpu: "2000m"
+  
+  # LSTM Trainer
+  lstm:
+    enabled: true
+    image:
+      repository: train
+      tag: "latest"
+      pullPolicy: IfNotPresent
+    replicas: 1
+    kafka:
+      consumerTopic: "training-data"
+      consumerGroupId: "train-lstm"
+      producerTopic: "model-training"
+    env:
+      modelType: "LSTM"
+      trainTestSplit: 0.8
+      inputSeqLen: 10
+      outputSeqLen: 1
+      hiddenSize: 128
+      numLayers: 2
+      batchSize: 64
+      epochs: 5  # Reduced from 10 for faster training
+      earlyStopping: "True"
+      patience: 30
+      learningRate: "1e-4"
+      failureMaxRetries: 3
+      enableXai: "false"
+      skipDuplicateConfigs: "1"
+      dupCacheMax: "500"
+      # NOTE: Sampling happens in preprocess, NOT in training containers
+      # Training consumes pre-sampled data directly from MinIO
+    resources:
+      requests:
+        memory: "2Gi"
+        cpu: "1000m"
+      limits:
+        memory: "4Gi"
+        cpu: "2000m"
+
+# NonML Trainers (Prophet, etc.)
+nonml:
+  # Prophet baseline model
+  prophet:
+    enabled: true
+    image:
+      repository: nonml
+      tag: "latest"
+      pullPolicy: IfNotPresent
+    replicas: 1
+    kafka:
+      consumerTopic: "training-data"
+      consumerGroupId: "nonml-prophet"
+      producerTopic: "model-training"
+    env:
+      modelType: "PROPHET"
+      trainTestSplit: 0.8
+      outputSeqLen: 1
+      failureMaxRetries: 3
+      # Prophet-specific params
+      nChangepoints: 50
+      changepointRange: 0.8
+      yearlySeasonality: "auto"
+      weeklySeasonality: "auto"
+      dailySeasonality: "auto"
+      seasonalityMode: "additive"
+      seasonalityPriorScale: 20
+      holidaysPriorScale: 10
+      changepointPriorScale: 0.1
+      country: "US"
+      skipDuplicateConfigs: "1"
+      dupCacheMax: "500"
+      # NOTE: Sampling happens in preprocess, NOT in training containers
+      # Training consumes pre-sampled data directly from MinIO
+    resources:
+      requests:
+        memory: "1Gi"
+        cpu: "500m"
+      limits:
+        memory: "2Gi"
+        cpu: "1000m"
+
+# Evaluation & Model Promotion service
+eval:
+  enabled: true
+  image:
+    repository: eval
+    tag: "latest"
+    pullPolicy: IfNotPresent
+  replicas: 1
+  service:
+    type: ClusterIP
+    port: 8050
+  kafka:
+    consumerTopic: "model-training"
+    producerTopic: "model-selected"
+    modelTrainingTopic: "model-training"
+    modelSelectedTopic: "model-selected"
+    dlqModelSelected: "DLQ-model-selected"
+    consumerGroupId: "eval-promoter-r5"
+  expectedModelTypes: "GRU,LSTM,PROPHET"
+  promotionBucket: "model-promotion"
+  env:
+    lookbackRuns: 50
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "250m"
+    limits:
+      memory: "1Gi"
+      cpu: "500m"
+
+# Inference service - Scalable prediction API
+inference:
+  enabled: true
+  image:
+    repository: inference
+    tag: "latest"
+    pullPolicy: IfNotPresent
+  replicas: 2  # Scale horizontally for load
+  service:
+    type: ClusterIP
+    port: 8000
+    metricsPort: 9091
+  kafka:
+    consumerTopics:
+      - "inference-data"
+      - "model-training"
+    consumerGroupId: "batch-forecasting-v2"
+    producerTopic: "performance-eval"
+    promotionTopic: "model-selected"
+  env:
+    inferenceLogBucket: "inference-logs"
+    sampleIdx: 0
+    inferenceLength: 10
+    runInferenceOnTrainSuccess: "1"
+    disableStartupInference: "1"
+    predictProgressInterval: "0"
+    disableInferenceCache: "1"
+    enablePredictCache: "0"
+    # Concurrency controls
+    waitForModel: "1"
+    modelWaitTimeout: "5"
+    inferencePrewarm: "1"
+    queueWorkers: "6"
+    queueMaxsize: "10"
+    inferenceTimeout: "60"
+    inferenceStartInApp: "1"
+    simulateDelaySecs: "0"
+    # Kafka backpressure
+    useBoundedQueue: "1"
+    useManualCommit: "1"
+    fetchMaxWaitMs: "50"
+    maxPollRecords: "64"
+    pauseThresholdPct: "80"
+    resumeThresholdPct: "50"
+    enableMicrobatch: "1"
+    batchSize: "32"
+    batchTimeoutMs: "25"
+    enableTtl: "1"
+    # API controls
+    enablePublishApi: "1"
+    uvicornKeepalive: "30"
+    predictMaxConcurrency: "64"
+  resources:
+    requests:
+      memory: "1Gi"
+      cpu: "500m"
+    limits:
+      memory: "2Gi"
+      cpu: "1000m"
+  healthcheck:
+    enabled: true
+    path: "/ready"
+    interval: 5s
+    timeout: 3s
+    retries: 40
+  
+  # Horizontal Pod Autoscaler
+  autoscaling:
+    enabled: false  # Enable in production or for load testing
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+
+# Inference Load Balancer (HAProxy) - DEPRECATED
+# Use native Kubernetes Service load balancing instead
+inferenceLb:
+  enabled: false  # Disabled - using native K8s load balancing
+  image:
+    repository: haproxy
+    tag: "2.9-alpine"
+  service:
+    type: LoadBalancer
+    port: 80
+    targetPort: 80
+    nodePort: 30023
+  replicas: 1
+  resources:
+    requests:
+      memory: "128Mi"
+      cpu: "100m"
+    limits:
+      memory: "256Mi"
+      cpu: "200m"
+  healthcheck:
+    enabled: true
+    path: "/healthz"
+    interval: 5s
+    timeout: 3s
+    retries: 10
+
+# Prometheus - Metrics collection
+prometheus:
+  enabled: true
+  image:
+    repository: prom/prometheus
+    tag: "latest"
+  service:
+    type: ClusterIP
+    port: 9090
+  scrapeInterval: "15s"
+  retention: "7d"
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "250m"
+    limits:
+      memory: "1Gi"
+      cpu: "500m"
+  persistence:
+    enabled: false
+    size: "5Gi"
+
+# Grafana - Metrics visualization
+grafana:
+  enabled: true
+  image:
+    repository: grafana/grafana-oss
+    tag: "latest"
+  service:
+    type: ClusterIP
+    port: 3000
+  auth:
+    adminUser: "admin"
+    adminPassword: "admin"  # CHANGE IN PRODUCTION
+    allowSignUp: false
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "512Mi"
+      cpu: "250m"
+  persistence:
+    enabled: false
+    size: "2Gi"
+
+# Locust - Load testing framework
+# NOTE: Now targets inference service directly (native K8s load balancing)
+# instead of HAProxy inference-lb
+locust:
+  enabled: true
+  targetHost: "inference"  # Changed from inference-lb to inference service
+  targetPort: 8000  # Changed from 8023 (HAProxy) to 8000 (inference app)
+  warmupOnly: "0"
+  warmupSamples: "10"
+  seedPredictQueue: "0"
+  seedCount: "5"
+  
+  # Locust Master
+  master:
+    image:
+      repository: locustio/locust
+      tag: "latest"
+    replicas: 1
+    service:
+      type: ClusterIP
+      webPort: 8089
+      masterPort: 5557
+      masterBindPort: 5558
+    env:
+      gatewayBase: "http://fastapi-app:8000"
+      endpointDownload: "http://fastapi-app:8000/download/model-promotion/current.json"
+      predictUrl: "http://inference:8000/predict"  # Changed from inference-lb to inference
+      predictWarmupDisable: "1"
+      locustWaitForModel: "0"
+      locustPreflightDisable: "1"
+      kafkaBurst: "0"
+      locustEnablePredictCache: "0"
+      predictPayloadMode: "synthetic"
+      targetHost: "http://inference:8000"  # Changed from inference-lb to inference
+    resources:
+      requests:
+        memory: "256Mi"
+        cpu: "100m"
+      limits:
+        memory: "512Mi"
+        cpu: "250m"
+  
+  # Locust Workers
+  worker:
+    replicas: 4
+    image:
+      repository: locustio/locust
+      tag: "latest"
+    resources:
+      requests:
+        memory: "256Mi"
+        cpu: "250m"
+      limits:
+        memory: "512Mi"
+        cpu: "500m"
+
+# Ingress configuration for external access
+ingress:
+  enabled: false
+  className: "nginx"  # or "traefik", depends on your cluster
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"  # Optional TLS
+  hosts:
+    - host: mlflow.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+          service: mlflow
+          port: 5000
+    - host: grafana.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+          service: grafana
+          port: 3000
+    - host: inference.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+          service: inference-lb
+          port: 80
+    - host: locust.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+          service: locust
+          port: 8089
+  tls: []
+  # - secretName: flts-tls
+  #   hosts:
+  #     - mlflow.example.com
+  #     - grafana.example.com
+
+# Service Account
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+# Pod Security Context
+podSecurityContext: {}
+  # fsGroup: 2000
+
+securityContext: {}
+  # capabilities:
+  #   drop:
+  #   - ALL
+  # readOnlyRootFilesystem: true
+  # runAsNonRoot: true
+  # runAsUser: 1000
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}

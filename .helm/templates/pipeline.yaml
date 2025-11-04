@@ -42,6 +42,7 @@ spec:
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       initContainers:
+        {{- if not .Values.externalBackend.enabled }}
         - name: wait-for-fastapi
           image: busybox:1.35
           command:
@@ -52,6 +53,7 @@ spec:
                 echo "Waiting for FastAPI..."
                 sleep 2
               done
+        {{- end }}
       containers:
         - name: eda
           securityContext:
@@ -85,6 +87,7 @@ spec:
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       initContainers:
+        {{- if not .Values.externalBackend.enabled }}
         - name: wait-for-fastapi
           image: busybox:1.35
           command:
@@ -95,6 +98,7 @@ spec:
                 echo "Waiting for FastAPI..."
                 sleep 2
               done
+        {{- end }}
         - name: wait-for-kafka
           image: busybox:1.35
           command:
@@ -113,7 +117,7 @@ spec:
           imagePullPolicy: {{ .Values.global.pullPolicy }}
           env:
             - name: GATEWAY_URL
-              value: "http://fastapi-app:{{ .Values.fastapi.service.port }}"
+              value: {{ include "chart.gatewayUrl" . | quote }}
             - name: KAFKA_BOOTSTRAP_SERVERS
               value: "kafka:{{ .Values.kafka.service.port }}"
             - name: PRODUCER_TOPIC_0
@@ -122,6 +126,36 @@ spec:
               value: "{{ .Values.preprocess.kafka.topics.inference }}"
             - name: SCALER
               value: "{{ .Values.preprocess.scaler }}"
+            - name: DATASET_NAME
+              value: "{{ .Values.preprocess.env.datasetName }}"
+            {{- if .Values.preprocess.env.sampleTrainRows }}
+            - name: SAMPLE_TRAIN_ROWS
+              value: "{{ .Values.preprocess.env.sampleTrainRows }}"
+            {{- end }}
+            {{- if .Values.preprocess.env.sampleTestRows }}
+            - name: SAMPLE_TEST_ROWS
+              value: "{{ .Values.preprocess.env.sampleTestRows }}"
+            {{- end }}
+            {{- if .Values.preprocess.env.sampleStrategy }}
+            - name: SAMPLE_STRATEGY
+              value: "{{ .Values.preprocess.env.sampleStrategy }}"
+            {{- end }}
+            {{- if .Values.preprocess.env.sampleSeed }}
+            - name: SAMPLE_SEED
+              value: "{{ .Values.preprocess.env.sampleSeed }}"
+            {{- end }}
+            {{- if .Values.preprocess.env.forceReprocess }}
+            - name: FORCE_REPROCESS
+              value: "{{ .Values.preprocess.env.forceReprocess }}"
+            {{- end }}
+            {{- if .Values.preprocess.env.extraHashSalt }}
+            - name: EXTRA_HASH_SALT
+              value: "{{ .Values.preprocess.env.extraHashSalt }}"
+            {{- end }}
+            {{- if .Values.preprocess.env.configPath }}
+            - name: CONFIG_PATH
+              value: "{{ .Values.preprocess.env.configPath }}"
+            {{- end }}
       restartPolicy: Never
   backoffLimit: 3
 
@@ -145,6 +179,7 @@ spec:
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       initContainers:
+        {{- if not .Values.externalBackend.enabled }}
         - name: wait-for-mlflow
           image: busybox:1.35
           command:
@@ -155,6 +190,7 @@ spec:
                 echo "Waiting for MLflow..."
                 sleep 2
               done
+        {{- end }}
         - name: wait-for-kafka
           image: edenhill/kcat:1.7.1
           command:
@@ -185,7 +221,7 @@ spec:
               cpu: "{{ .Values.train.resources.limits.cpu }}"
           env:
             - name: GATEWAY_URL
-              value: "http://fastapi-app:{{ .Values.fastapi.service.port }}"
+              value: {{ include "chart.gatewayUrl" . | quote }}
             - name: KAFKA_BOOTSTRAP_SERVERS
               value: "kafka:{{ .Values.kafka.service.port }}"
             - name: CONSUMER_TOPIC
@@ -195,13 +231,13 @@ spec:
             - name: PRODUCER_TOPIC
               value: "{{ .Values.train.kafka.producerTopic }}"
             - name: MLFLOW_TRACKING_URI
-              value: "http://mlflow:{{ .Values.mlflow.service.port }}"
+              value: {{ include "chart.mlflowTrackingUri" . | quote }}
             - name: MLFLOW_S3_ENDPOINT_URL
-              value: "http://minio:{{ .Values.minio.service.apiPort }}"
+              value: {{ include "chart.minioEndpoint" . | quote }}
             - name: AWS_ACCESS_KEY_ID
-              value: "{{ .Values.minio.auth.accessKey }}"
+              value: {{ include "chart.minioAccessKey" . | quote }}
             - name: AWS_SECRET_ACCESS_KEY
-              value: "{{ .Values.minio.auth.secretKey }}"
+              value: {{ include "chart.minioSecretKey" . | quote }}
             - name: GIT_PYTHON_REFRESH
               value: "quiet"
 
@@ -290,17 +326,17 @@ spec:
           imagePullPolicy: {{ .Values.global.pullPolicy }}
           env:
             - name: GATEWAY_URL
-              value: "http://fastapi-app:{{ .Values.fastapi.service.port }}"
+              value: {{ include "chart.gatewayUrl" . | quote }}
             - name: KAFKA_BOOTSTRAP_SERVERS
               value: "kafka:{{ .Values.kafka.service.port }}"
             - name: MLFLOW_TRACKING_URI
-              value: "http://mlflow:{{ .Values.mlflow.service.port }}"
+              value: {{ include "chart.mlflowTrackingUri" . | quote }}
             - name: MLFLOW_S3_ENDPOINT_URL
-              value: "http://minio:{{ .Values.minio.service.apiPort }}"
+              value: {{ include "chart.minioEndpoint" . | quote }}
             - name: AWS_ACCESS_KEY_ID
-              value: "{{ .Values.minio.auth.accessKey }}"
+              value: {{ include "chart.minioAccessKey" . | quote }}
             - name: AWS_SECRET_ACCESS_KEY
-              value: "{{ .Values.minio.auth.secretKey }}"
+              value: {{ include "chart.minioSecretKey" . | quote }}
             - name: CONSUMER_TOPIC
               value: "{{ .Values.nonml.kafka.consumerTopic }}"
             - name: CONSUMER_GROUP_ID
@@ -318,7 +354,7 @@ spec:
 {{- end }}
 
 ---
-# Inference Service
+# Inference Service (Native Kubernetes Load Balancing)
 apiVersion: v1
 kind: Service
 metadata:
@@ -326,16 +362,27 @@ metadata:
   labels:
     app.kubernetes.io/name: inference
     app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: inference
 spec:
-  type: ClusterIP
+  type: {{ .Values.inference.service.type | default "ClusterIP" }}
+  {{- if and (eq (.Values.inference.service.type | default "ClusterIP") "NodePort") .Values.inference.service.nodePort }}
   ports:
     - port: {{ .Values.inference.service.port }}
-      targetPort: 8023
+      targetPort: 8000
+      nodePort: {{ .Values.inference.service.nodePort }}
       protocol: TCP
-      name: inference
+      name: http
+  {{- else }}
+  ports:
+    - port: {{ .Values.inference.service.port }}
+      targetPort: 8000
+      protocol: TCP
+      name: http
+  {{- end }}
   selector:
     app.kubernetes.io/name: inference
     app.kubernetes.io/instance: {{ .Release.Name }}
+  sessionAffinity: None  # Round-robin load balancing
 
 ---
 # Inference Deployment
@@ -346,8 +393,9 @@ metadata:
   labels:
     app.kubernetes.io/name: inference
     app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: inference
 spec:
-  replicas: 1
+  replicas: {{ .Values.inference.replicas }}
   selector:
     matchLabels:
       app.kubernetes.io/name: inference
@@ -357,18 +405,41 @@ spec:
       labels:
         app.kubernetes.io/name: inference
         app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: inference
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "{{ .Values.inference.service.port }}"
+        prometheus.io/path: "/metrics"
     spec:
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       initContainers:
         - name: wait-for-kafka
+          image: edenhill/kcat:1.7.1
+          command:
+            - sh
+            - -c
+            - |
+              echo "Waiting for Kafka to become fully operational..."
+              until kcat -b kafka:{{ .Values.kafka.service.port }} -L -t 10; do
+                echo "Kafka broker not ready yet, retrying in 5 seconds..."
+                sleep 5
+              done
+              echo "Success! Kafka is ready to accept connections."
+        {{- if not .Values.externalBackend.enabled }}
+        - name: wait-for-mlflow
           image: busybox:1.35
           command:
             - sh
             - -c
             - |
-              until nc -z kafka 9092; do
-                echo "Waiting for Kafka..."
+              until nc -z mlflow {{ .Values.mlflow.service.port }}; do
+                echo "Waiting for MLflow..."
+                sleep 2
+              done
+        {{- end }}
+      containers:
+                echo "Waiting for MLflow..."
                 sleep 2
               done
       containers:
@@ -378,22 +449,32 @@ spec:
           image: "{{ .Values.inference.image.repository }}:{{ .Values.inference.image.tag }}"
           imagePullPolicy: {{ .Values.global.pullPolicy }}
           ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
             - name: inference
               containerPort: 8023
               protocol: TCP
+          resources:
+            requests:
+              cpu: "{{ .Values.inference.resources.requests.cpu }}"
+              memory: "{{ .Values.inference.resources.requests.memory }}"
+            limits:
+              cpu: "{{ .Values.inference.resources.limits.cpu }}"
+              memory: "{{ .Values.inference.resources.limits.memory }}"
           env:
             - name: GATEWAY_URL
-              value: "http://fastapi-app:{{ .Values.fastapi.service.port }}"
+              value: {{ include "chart.gatewayUrl" . | quote }}
             - name: MLFLOW_TRACKING_URI
-              value: "http://mlflow:{{ .Values.mlflow.service.port }}"
+              value: {{ include "chart.mlflowTrackingUri" . | quote }}
             - name: MLFLOW_S3_ENDPOINT_URL
-              value: "http://minio:{{ .Values.minio.service.apiPort }}"
+              value: {{ include "chart.minioEndpoint" . | quote }}
             - name: TQDM_DISABLE
               value: "1"
             - name: AWS_ACCESS_KEY_ID
-              value: "{{ .Values.minio.auth.accessKey }}"
+              value: {{ include "chart.minioAccessKey" . | quote }}
             - name: AWS_SECRET_ACCESS_KEY
-              value: "{{ .Values.minio.auth.secretKey }}"
+              value: {{ include "chart.minioSecretKey" . | quote }}
             - name: KAFKA_BOOTSTRAP_SERVERS
               value: "kafka:{{ .Values.kafka.service.port }}"
             - name: CONSUMER_TOPIC_0
@@ -408,3 +489,30 @@ spec:
               value: "{{ .Values.inference.config.sampleIdx }}"
             - name: INFERENCE_LENGTH
               value: "{{ .Values.inference.config.inferenceLength }}"
+            - name: PREDICT_MAX_CONCURRENCY
+              value: "{{ .Values.inference.config.predictMaxConcurrency }}"
+            - name: ENABLE_PREDICT_CACHE
+              value: "{{ .Values.inference.config.enablePredictCache }}"
+            - name: PREDICT_FORCE_OK
+              value: "{{ .Values.inference.config.predictForceOk }}"
+            - name: INFERENCE_WORKERS
+              value: "{{ .Values.inference.config.inferenceWorkers }}"
+            - name: INFERENCE_LOG_BUCKET
+              value: "{{ .Values.inference.config.inferenceLogBucket }}"
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+            initialDelaySeconds: 60
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+      restartPolicy: Always

@@ -1,0 +1,68 @@
+# Minimal values for using external Docker backend
+# Use with: helm install flts .helm -f .helm/values-external-backend.yaml
+
+# External Backend Configuration
+externalBackend:
+  enabled: true
+  mlflow:
+    trackingUri: "http://host.docker.internal:5000"
+  minio:
+    endpoint: "http://host.docker.internal:9000"
+    accessKey: "minioadmin"
+    secretKey: "minioadmin"
+  fastapi:
+    gatewayUrl: "http://host.docker.internal:8000"
+
+global:
+  pullPolicy: Always
+
+# Disable in-cluster backend services
+minio:
+  enabled: false
+postgres:
+  enabled: false
+mlflow:
+  enabled: false
+fastapi:
+  enabled: false
+eda:
+  enabled: false
+
+# Keep only necessary services
+kafka:
+  enabled: true
+
+# Preprocess configuration
+preprocess:
+  enabled: true
+  env:
+    datasetName: "PobleSec"
+    sampleTrainRows: "50"
+    sampleTestRows: "50"
+    sampleStrategy: "head"
+    sampleSeed: "42"
+    forceReprocess: "1"
+
+# Training services
+train:
+  gru:
+    enabled: true
+  lstm:
+    enabled: true
+
+nonml:
+  prophet:
+    enabled: true
+
+# Evaluation
+eval:
+  enabled: true
+
+# Inference
+inference:
+  enabled: true
+  replicas: 2
+
+# Disable load testing components for now
+locust:
+  enabled: false

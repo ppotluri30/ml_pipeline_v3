@@ -1,0 +1,523 @@
+{{- if .Values.train.gru.enabled | default true }}
+---
+# Train GRU Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: train-gru
+  labels:
+    app.kubernetes.io/name: train-gru
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: training
+spec:
+  replicas: {{ .Values.train.gru.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: train-gru
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: train-gru
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: training
+    spec:
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      initContainers:
+        {{- if not .Values.externalBackend.enabled }}
+        - name: wait-for-mlflow
+          image: busybox:1.35
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z mlflow {{ .Values.mlflow.service.port }}; do
+                echo "Waiting for MLflow..."
+                sleep 2
+              done
+        {{- end }}
+        - name: wait-for-kafka
+          image: edenhill/kcat:1.7.1
+          command:
+            - sh
+            - -c
+            - |
+              echo "Waiting for Kafka to become fully operational..."
+              until kcat -b kafka:{{ .Values.kafka.service.port }} -L -t 10; do
+                echo "Kafka broker not ready yet, retrying in 5 seconds..."
+                sleep 5
+              done
+              echo "Success! Kafka is ready to accept connections."
+      containers:
+        - name: train-gru
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.train.gru.image.repository }}:{{ .Values.train.gru.image.tag }}"
+          imagePullPolicy: {{ .Values.global.pullPolicy }}
+          resources:
+            requests:
+              cpu: "{{ .Values.train.gru.resources.requests.cpu }}"
+              memory: "{{ .Values.train.gru.resources.requests.memory }}"
+            limits:
+              cpu: "{{ .Values.train.gru.resources.limits.cpu }}"
+              memory: "{{ .Values.train.gru.resources.limits.memory }}"
+          env:
+            - name: GATEWAY_URL
+              value: {{ include "chart.gatewayUrl" . | quote }}
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: "kafka:{{ .Values.kafka.service.port }}"
+            - name: CONSUMER_TOPIC
+              value: "{{ .Values.train.gru.kafka.consumerTopic }}"
+            - name: CONSUMER_GROUP_ID
+              value: "{{ .Values.train.gru.kafka.consumerGroupId }}"
+            - name: PRODUCER_TOPIC
+              value: "{{ .Values.train.gru.kafka.producerTopic }}"
+            - name: MLFLOW_TRACKING_URI
+              value: {{ include "chart.mlflowTrackingUri" . | quote }}
+            - name: MLFLOW_S3_ENDPOINT_URL
+              value: {{ include "chart.minioEndpoint" . | quote }}
+            - name: AWS_ACCESS_KEY_ID
+              value: {{ include "chart.minioAccessKey" . | quote }}
+            - name: AWS_SECRET_ACCESS_KEY
+              value: {{ include "chart.minioSecretKey" . | quote }}
+            - name: GIT_PYTHON_REFRESH
+              value: "quiet"
+            # Model configuration
+            - name: MODEL_TYPE
+              value: "GRU"
+            - name: TRAIN_TEST_SPLIT
+              value: "{{ .Values.train.gru.env.trainTestSplit }}"
+            - name: INPUT_SEQ_LEN
+              value: "{{ .Values.train.gru.env.inputSeqLen }}"
+            - name: OUTPUT_SEQ_LEN
+              value: "{{ .Values.train.gru.env.outputSeqLen }}"
+            - name: BATCH_SIZE
+              value: "{{ .Values.train.gru.env.batchSize }}"
+            - name: EPOCHS
+              value: "{{ .Values.train.gru.env.epochs }}"
+            - name: EARLY_STOPPING
+              value: "{{ .Values.train.gru.env.earlyStopping }}"
+            - name: PATIENCE
+              value: "{{ .Values.train.gru.env.patience }}"
+            - name: LEARNING_RATE
+              value: "{{ .Values.train.gru.env.learningRate }}"
+            - name: HIDDEN_SIZE
+              value: "{{ .Values.train.gru.env.hiddenSize }}"
+            - name: NUM_LAYERS
+              value: "{{ .Values.train.gru.env.numLayers }}"
+            - name: SKIP_DUPLICATE_CONFIGS
+              value: "{{ .Values.train.gru.env.skipDuplicateConfigs }}"
+            {{- if .Values.train.gru.env.sampleTrainRows }}
+            - name: SAMPLE_TRAIN_ROWS
+              value: "{{ .Values.train.gru.env.sampleTrainRows }}"
+            {{- end }}
+            {{- if .Values.train.gru.env.sampleTestRows }}
+            - name: SAMPLE_TEST_ROWS
+              value: "{{ .Values.train.gru.env.sampleTestRows }}"
+            {{- end }}
+            {{- if .Values.train.gru.env.sampleStrategy }}
+            - name: SAMPLE_STRATEGY
+              value: "{{ .Values.train.gru.env.sampleStrategy }}"
+            {{- end }}
+            {{- if .Values.train.gru.env.sampleSeed }}
+            - name: SAMPLE_SEED
+              value: "{{ .Values.train.gru.env.sampleSeed }}"
+            {{- end }}
+      restartPolicy: Always
+{{- end }}
+
+{{- if .Values.train.lstm.enabled | default true }}
+---
+# Train LSTM Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: train-lstm
+  labels:
+    app.kubernetes.io/name: train-lstm
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: training
+spec:
+  replicas: {{ .Values.train.lstm.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: train-lstm
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: train-lstm
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: training
+    spec:
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      initContainers:
+        {{- if not .Values.externalBackend.enabled }}
+        - name: wait-for-mlflow
+          image: busybox:1.35
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z mlflow {{ .Values.mlflow.service.port }}; do
+                echo "Waiting for MLflow..."
+                sleep 2
+              done
+        {{- end }}
+        - name: wait-for-kafka
+          image: edenhill/kcat:1.7.1
+          command:
+            - sh
+            - -c
+            - |
+              echo "Waiting for Kafka to become fully operational..."
+              until kcat -b kafka:{{ .Values.kafka.service.port }} -L -t 10; do
+                echo "Kafka broker not ready yet, retrying in 5 seconds..."
+                sleep 5
+              done
+              echo "Success! Kafka is ready to accept connections."
+      containers:
+        - name: train-lstm
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.train.lstm.image.repository }}:{{ .Values.train.lstm.image.tag }}"
+          imagePullPolicy: {{ .Values.global.pullPolicy }}
+          resources:
+            requests:
+              cpu: "{{ .Values.train.lstm.resources.requests.cpu }}"
+              memory: "{{ .Values.train.lstm.resources.requests.memory }}"
+            limits:
+              cpu: "{{ .Values.train.lstm.resources.limits.cpu }}"
+              memory: "{{ .Values.train.lstm.resources.limits.memory }}"
+          env:
+            - name: GATEWAY_URL
+              value: {{ include "chart.gatewayUrl" . | quote }}
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: "kafka:{{ .Values.kafka.service.port }}"
+            - name: CONSUMER_TOPIC
+              value: "{{ .Values.train.lstm.kafka.consumerTopic }}"
+            - name: CONSUMER_GROUP_ID
+              value: "{{ .Values.train.lstm.kafka.consumerGroupId }}"
+            - name: PRODUCER_TOPIC
+              value: "{{ .Values.train.lstm.kafka.producerTopic }}"
+            - name: MLFLOW_TRACKING_URI
+              value: {{ include "chart.mlflowTrackingUri" . | quote }}
+            - name: MLFLOW_S3_ENDPOINT_URL
+              value: {{ include "chart.minioEndpoint" . | quote }}
+            - name: AWS_ACCESS_KEY_ID
+              value: {{ include "chart.minioAccessKey" . | quote }}
+            - name: AWS_SECRET_ACCESS_KEY
+              value: {{ include "chart.minioSecretKey" . | quote }}
+            - name: GIT_PYTHON_REFRESH
+              value: "quiet"
+            # Model configuration
+            - name: MODEL_TYPE
+              value: "LSTM"
+            - name: TRAIN_TEST_SPLIT
+              value: "{{ .Values.train.lstm.env.trainTestSplit }}"
+            - name: INPUT_SEQ_LEN
+              value: "{{ .Values.train.lstm.env.inputSeqLen }}"
+            - name: OUTPUT_SEQ_LEN
+              value: "{{ .Values.train.lstm.env.outputSeqLen }}"
+            - name: BATCH_SIZE
+              value: "{{ .Values.train.lstm.env.batchSize }}"
+            - name: EPOCHS
+              value: "{{ .Values.train.lstm.env.epochs }}"
+            - name: EARLY_STOPPING
+              value: "{{ .Values.train.lstm.env.earlyStopping }}"
+            - name: PATIENCE
+              value: "{{ .Values.train.lstm.env.patience }}"
+            - name: LEARNING_RATE
+              value: "{{ .Values.train.lstm.env.learningRate }}"
+            - name: HIDDEN_SIZE
+              value: "{{ .Values.train.lstm.env.hiddenSize }}"
+            - name: NUM_LAYERS
+              value: "{{ .Values.train.lstm.env.numLayers }}"
+            - name: SKIP_DUPLICATE_CONFIGS
+              value: "{{ .Values.train.lstm.env.skipDuplicateConfigs }}"
+            {{- if .Values.train.lstm.env.sampleTrainRows }}
+            - name: SAMPLE_TRAIN_ROWS
+              value: "{{ .Values.train.lstm.env.sampleTrainRows }}"
+            {{- end }}
+            {{- if .Values.train.lstm.env.sampleTestRows }}
+            - name: SAMPLE_TEST_ROWS
+              value: "{{ .Values.train.lstm.env.sampleTestRows }}"
+            {{- end }}
+            {{- if .Values.train.lstm.env.sampleStrategy }}
+            - name: SAMPLE_STRATEGY
+              value: "{{ .Values.train.lstm.env.sampleStrategy }}"
+            {{- end }}
+            {{- if .Values.train.lstm.env.sampleSeed }}
+            - name: SAMPLE_SEED
+              value: "{{ .Values.train.lstm.env.sampleSeed }}"
+            {{- end }}
+      restartPolicy: Always
+{{- end }}
+
+{{- if .Values.nonml.prophet.enabled | default true }}
+---
+# Non-ML Prophet Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nonml-prophet
+  labels:
+    app.kubernetes.io/name: nonml-prophet
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: training
+spec:
+  replicas: {{ .Values.nonml.prophet.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: nonml-prophet
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: nonml-prophet
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: training
+    spec:
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      initContainers:
+        {{- if not .Values.externalBackend.enabled }}
+        - name: wait-for-mlflow
+          image: busybox:1.35
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z mlflow {{ .Values.mlflow.service.port }}; do
+                echo "Waiting for MLflow..."
+                sleep 2
+              done
+        {{- end }}
+        - name: wait-for-kafka
+          image: edenhill/kcat:1.7.1
+          command:
+            - sh
+            - -c
+            - |
+              echo "Waiting for Kafka to become fully operational..."
+              until kcat -b kafka:{{ .Values.kafka.service.port }} -L -t 10; do
+                echo "Kafka broker not ready yet, retrying in 5 seconds..."
+                sleep 5
+              done
+              echo "Success! Kafka is ready to accept connections."
+      containers:
+        - name: nonml-prophet
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.nonml.prophet.image.repository }}:{{ .Values.nonml.prophet.image.tag }}"
+          imagePullPolicy: {{ .Values.global.pullPolicy }}
+          resources:
+            requests:
+              cpu: "{{ .Values.nonml.prophet.resources.requests.cpu }}"
+              memory: "{{ .Values.nonml.prophet.resources.requests.memory }}"
+            limits:
+              cpu: "{{ .Values.nonml.prophet.resources.limits.cpu }}"
+              memory: "{{ .Values.nonml.prophet.resources.limits.memory }}"
+          env:
+            - name: GATEWAY_URL
+              value: {{ include "chart.gatewayUrl" . | quote }}
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: "kafka:{{ .Values.kafka.service.port }}"
+            - name: CONSUMER_TOPIC
+              value: "{{ .Values.nonml.prophet.kafka.consumerTopic }}"
+            - name: CONSUMER_GROUP_ID
+              value: "{{ .Values.nonml.prophet.kafka.consumerGroupId }}"
+            - name: PRODUCER_TOPIC
+              value: "{{ .Values.nonml.prophet.kafka.producerTopic }}"
+            - name: MLFLOW_TRACKING_URI
+              value: {{ include "chart.mlflowTrackingUri" . | quote }}
+            - name: MLFLOW_S3_ENDPOINT_URL
+              value: {{ include "chart.minioEndpoint" . | quote }}
+            - name: AWS_ACCESS_KEY_ID
+              value: {{ include "chart.minioAccessKey" . | quote }}
+            - name: AWS_SECRET_ACCESS_KEY
+              value: {{ include "chart.minioSecretKey" . | quote }}
+            - name: GIT_PYTHON_REFRESH
+              value: "quiet"
+            # Model configuration
+            - name: MODEL_TYPE
+              value: "{{ .Values.nonml.prophet.env.modelType }}"
+            - name: TRAIN_TEST_SPLIT
+              value: "{{ .Values.nonml.prophet.env.trainTestSplit }}"
+            - name: OUTPUT_SEQ_LEN
+              value: "{{ .Values.nonml.prophet.env.outputSeqLen }}"
+            - name: N_CHANGEPOINTS
+              value: "{{ .Values.nonml.prophet.env.nChangepoints }}"
+            - name: CHANGEPOINT_RANGE
+              value: "{{ .Values.nonml.prophet.env.changepointRange }}"
+            - name: YEARLY_SEASONALITY
+              value: "{{ .Values.nonml.prophet.env.yearlySeasonality }}"
+            - name: WEEKLY_SEASONALITY
+              value: "{{ .Values.nonml.prophet.env.weeklySeasonality }}"
+            - name: DAILY_SEASONALITY
+              value: "{{ .Values.nonml.prophet.env.dailySeasonality }}"
+            - name: SEASONALITY_MODE
+              value: "{{ .Values.nonml.prophet.env.seasonalityMode }}"
+            - name: SKIP_DUPLICATE_CONFIGS
+              value: "{{ .Values.nonml.prophet.env.skipDuplicateConfigs }}"
+            {{- if .Values.nonml.prophet.env.sampleTrainRows }}
+            - name: SAMPLE_TRAIN_ROWS
+              value: "{{ .Values.nonml.prophet.env.sampleTrainRows }}"
+            {{- end }}
+            {{- if .Values.nonml.prophet.env.sampleTestRows }}
+            - name: SAMPLE_TEST_ROWS
+              value: "{{ .Values.nonml.prophet.env.sampleTestRows }}"
+            {{- end }}
+            {{- if .Values.nonml.prophet.env.sampleStrategy }}
+            - name: SAMPLE_STRATEGY
+              value: "{{ .Values.nonml.prophet.env.sampleStrategy }}"
+            {{- end }}
+            {{- if .Values.nonml.prophet.env.sampleSeed }}
+            - name: SAMPLE_SEED
+              value: "{{ .Values.nonml.prophet.env.sampleSeed }}"
+            {{- end }}
+      restartPolicy: Always
+{{- end }}
+
+{{- if .Values.eval.enabled | default true }}
+---
+# Eval Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: eval
+  labels:
+    app.kubernetes.io/name: eval
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: evaluation
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.eval.service.port }}
+      targetPort: {{ .Values.eval.service.port }}
+      protocol: TCP
+      name: eval
+  selector:
+    app.kubernetes.io/name: eval
+    app.kubernetes.io/instance: {{ .Release.Name }}
+
+---
+# Eval Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: eval
+  labels:
+    app.kubernetes.io/name: eval
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: evaluation
+spec:
+  replicas: {{ .Values.eval.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: eval
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: eval
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: evaluation
+    spec:
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      initContainers:
+        {{- if not .Values.externalBackend.enabled }}
+        - name: wait-for-fastapi
+          image: busybox:1.35
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z fastapi-app {{ .Values.fastapi.service.port }}; do
+                echo "Waiting for FastAPI..."
+                sleep 2
+              done
+        - name: wait-for-mlflow
+          image: busybox:1.35
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z mlflow {{ .Values.mlflow.service.port }}; do
+                echo "Waiting for MLflow..."
+                sleep 2
+              done
+        {{- end }}
+        - name: wait-for-kafka
+          image: edenhill/kcat:1.7.1
+          command:
+            - sh
+            - -c
+            - |
+              echo "Waiting for Kafka to become fully operational..."
+              until kcat -b kafka:{{ .Values.kafka.service.port }} -L -t 10; do
+                echo "Kafka broker not ready yet, retrying in 5 seconds..."
+                sleep 5
+              done
+              echo "Success! Kafka is ready to accept connections."
+      containers:
+        - name: eval
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.eval.image.repository }}:{{ .Values.eval.image.tag }}"
+          imagePullPolicy: {{ .Values.global.pullPolicy }}
+          ports:
+            - name: eval
+              containerPort: {{ .Values.eval.service.port }}
+              protocol: TCP
+          resources:
+            requests:
+              cpu: "{{ .Values.eval.resources.requests.cpu }}"
+              memory: "{{ .Values.eval.resources.requests.memory }}"
+            limits:
+              cpu: "{{ .Values.eval.resources.limits.cpu }}"
+              memory: "{{ .Values.eval.resources.limits.memory }}"
+          env:
+            - name: GATEWAY_URL
+              value: {{ include "chart.gatewayUrl" . | quote }}
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: "kafka:{{ .Values.kafka.service.port }}"
+            - name: CONSUMER_TOPIC
+              value: "{{ .Values.eval.kafka.consumerTopic }}"
+            - name: CONSUMER_GROUP_ID
+              value: "{{ .Values.eval.kafka.consumerGroupId }}"
+            - name: PRODUCER_TOPIC
+              value: "{{ .Values.eval.kafka.producerTopic }}"
+            - name: MLFLOW_TRACKING_URI
+              value: {{ include "chart.mlflowTrackingUri" . | quote }}
+            - name: MLFLOW_S3_ENDPOINT_URL
+              value: {{ include "chart.minioEndpoint" . | quote }}
+            - name: AWS_ACCESS_KEY_ID
+              value: {{ include "chart.minioAccessKey" . | quote }}
+            - name: AWS_SECRET_ACCESS_KEY
+              value: {{ include "chart.minioSecretKey" . | quote }}
+            - name: EXPECTED_MODEL_TYPES
+              value: "{{ .Values.eval.expectedModelTypes }}"
+            - name: PROMOTION_BUCKET
+              value: "{{ .Values.eval.promotionBucket }}"
+          livenessProbe:
+            httpGet:
+              path: /readyz
+              port: {{ .Values.eval.service.port }}
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: {{ .Values.eval.service.port }}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+      restartPolicy: Always
+{{- end }}

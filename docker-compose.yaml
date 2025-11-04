@@ -134,10 +134,10 @@ services:
       - CONFIG_PATH=/app/config.json
       - IDENTIFIER=${IDENTIFIER}
       - DATASET_NAME=PobleSec
-      - SAMPLE_TRAIN_ROWS=
-      - SAMPLE_TEST_ROWS=
-      - SAMPLE_STRATEGY=
-      - SAMPLE_SEED=
+      - SAMPLE_TRAIN_ROWS=50
+      - SAMPLE_TEST_ROWS=50
+      - SAMPLE_STRATEGY=head
+      - SAMPLE_SEED=42
       - FORCE_REPROCESS=1
       - EXTRA_HASH_SALT=forceInfer1
     depends_on:

@@ -1,0 +1,198 @@
+{{- if .Values.locust.enabled | default true }}
+---
+# Locust Master Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: locust-master
+  labels:
+    app.kubernetes.io/name: locust-master
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: load-testing
+spec:
+  type: {{ .Values.locust.master.service.type }}
+  ports:
+    - port: 8089
+      targetPort: 8089
+      protocol: TCP
+      name: web
+      {{- if and (eq .Values.locust.master.service.type "NodePort") .Values.locust.master.service.nodePort }}
+      nodePort: {{ .Values.locust.master.service.nodePort }}
+      {{- end }}
+    - port: 5557
+      targetPort: 5557
+      protocol: TCP
+      name: master
+    - port: 5558
+      targetPort: 5558
+      protocol: TCP
+      name: worker
+  selector:
+    app.kubernetes.io/name: locust-master
+    app.kubernetes.io/instance: {{ .Release.Name }}
+
+---
+# Locust Master Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: locust-master
+  labels:
+    app.kubernetes.io/name: locust-master
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: load-testing
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: locust-master
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: locust-master
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: load-testing
+    spec:
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      initContainers:
+        - name: wait-for-inference
+          image: busybox:1.35
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z {{ .Values.locust.targetHost }} {{ .Values.locust.targetPort }}; do
+                echo "Waiting for inference service..."
+                sleep 2
+              done
+      containers:
+        - name: locust
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.locust.master.image.repository }}:{{ .Values.locust.master.image.tag }}"
+          imagePullPolicy: {{ .Values.global.pullPolicy }}
+          args:
+            - --master
+            - --web-host=0.0.0.0
+            - --locustfile=/mnt/locust/locustfile.py
+            - --host=http://{{ .Values.locust.targetHost }}:{{ .Values.locust.targetPort }}
+          ports:
+            - name: web
+              containerPort: 8089
+              protocol: TCP
+            - name: master
+              containerPort: 5557
+              protocol: TCP
+            - name: worker
+              containerPort: 5558
+              protocol: TCP
+          env:
+            - name: GATEWAY_URL
+              value: "http://fastapi-app:{{ .Values.fastapi.service.port }}"
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: "kafka:{{ .Values.kafka.service.port }}"
+            - name: LOCUST_HOST
+              value: "http://{{ .Values.locust.targetHost }}:{{ .Values.locust.targetPort }}"
+            - name: WARMUP_ONLY
+              value: "{{ .Values.locust.warmupOnly }}"
+            - name: WARMUP_SAMPLES
+              value: "{{ .Values.locust.warmupSamples }}"
+            - name: SEED_PREDICT_QUEUE
+              value: "{{ .Values.locust.seedPredictQueue }}"
+            - name: SEED_COUNT
+              value: "{{ .Values.locust.seedCount }}"
+          resources:
+            requests:
+              cpu: "{{ .Values.locust.master.resources.requests.cpu }}"
+              memory: "{{ .Values.locust.master.resources.requests.memory }}"
+            limits:
+              cpu: "{{ .Values.locust.master.resources.limits.cpu }}"
+              memory: "{{ .Values.locust.master.resources.limits.memory }}"
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 8089
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8089
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+---
+# Locust Worker Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: locust-worker
+  labels:
+    app.kubernetes.io/name: locust-worker
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: load-testing
+spec:
+  replicas: {{ .Values.locust.worker.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: locust-worker
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: locust-worker
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: load-testing
+    spec:
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      initContainers:
+        - name: wait-for-master
+          image: busybox:1.35
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z locust-master 5557; do
+                echo "Waiting for Locust master..."
+                sleep 2
+              done
+      containers:
+        - name: locust
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.locust.worker.image.repository }}:{{ .Values.locust.worker.image.tag }}"
+          imagePullPolicy: {{ .Values.global.pullPolicy }}
+          args:
+            - --worker
+            - --master-host=locust-master
+            - --locustfile=/mnt/locust/locustfile.py
+          env:
+            - name: GATEWAY_URL
+              value: "http://fastapi-app:{{ .Values.fastapi.service.port }}"
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: "kafka:{{ .Values.kafka.service.port }}"
+            - name: LOCUST_HOST
+              value: "http://{{ .Values.locust.targetHost }}:{{ .Values.locust.targetPort }}"
+            - name: WARMUP_ONLY
+              value: "{{ .Values.locust.warmupOnly }}"
+            - name: WARMUP_SAMPLES
+              value: "{{ .Values.locust.warmupSamples }}"
+            - name: SEED_PREDICT_QUEUE
+              value: "{{ .Values.locust.seedPredictQueue }}"
+            - name: SEED_COUNT
+              value: "{{ .Values.locust.seedCount }}"
+          resources:
+            requests:
+              cpu: "{{ .Values.locust.worker.resources.requests.cpu }}"
+              memory: "{{ .Values.locust.worker.resources.requests.memory }}"
+            limits:
+              cpu: "{{ .Values.locust.worker.resources.limits.cpu }}"
+              memory: "{{ .Values.locust.worker.resources.limits.memory }}"
+{{- end }}
