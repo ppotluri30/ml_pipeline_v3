@@ -6,6 +6,15 @@ from typing import Optional, Any, List, Dict
 from sklearn.impute import KNNImputer # type: ignore
 from sklearn.preprocessing import MinMaxScaler, StandardScaler, RobustScaler, MaxAbsScaler # type: ignore
 
+# ===== DIAGNOSTIC TRACING =====
+DEBUG_PAYLOAD_TRACE = os.getenv("DEBUG_PAYLOAD_TRACE", "0") in {"1", "true", "TRUE"}
+
+def _trace_data_utils(tag: str, message: str):
+    """Diagnostic trace logging for data_utils transformations"""
+    if DEBUG_PAYLOAD_TRACE:
+        print(f"[DATA_UTILS_{tag}] {message}")
+# ===== END DIAGNOSTIC TRACING =====
+
 
 def strip_timezones(df: Optional[pd.DataFrame]) -> tuple[Optional[pd.DataFrame], Dict[str, Any]]:
     """Remove timezone information from datetime columns and index.
@@ -15,6 +24,13 @@ def strip_timezones(df: Optional[pd.DataFrame]) -> tuple[Optional[pd.DataFrame],
     info: Dict[str, Any] = {"index": False, "columns": []}
     if df is None:
         return df, info
+
+    # ===== TRACE: Before timezone strip =====
+    if DEBUG_PAYLOAD_TRACE and isinstance(df.index, pd.DatetimeIndex):
+        unique_before = df.index.nunique()
+        sample_before = list(df.index[:3])
+        has_tz = df.index.tz is not None
+        _trace_data_utils("STRIP_TZ_BEFORE", f"unique={unique_before} has_tz={has_tz} sample={sample_before}")
 
     # Handle datetime index with timezone
     try:
@@ -26,6 +42,14 @@ def strip_timezones(df: Optional[pd.DataFrame]) -> tuple[Optional[pd.DataFrame],
             info["index"] = True
     except Exception:
         pass
+
+    # ===== TRACE: After timezone strip =====
+    if DEBUG_PAYLOAD_TRACE and isinstance(df.index, pd.DatetimeIndex):
+        unique_after = df.index.nunique()
+        sample_after = list(df.index[:3])
+        _trace_data_utils("STRIP_TZ_AFTER", f"unique={unique_after} sample={sample_after}")
+        if unique_after != unique_before:
+            _trace_data_utils("STRIP_TZ_COLLAPSE", f"❌ DETECTED: unique count changed from {unique_before} to {unique_after}!")
 
     # Handle dataframe columns that are timezone-aware datetimes
     adjusted_cols: List[str] = []
@@ -252,6 +276,10 @@ def check_uniform(df: pd.DataFrame) -> pd.Timedelta:
         # leading to an empty mode.
         raise ValueError('Cannot determine most common frequency, not enough valid time differences.')
 
+    # Safeguard against zero frequency (would cause division by zero in pd.date_range)
+    if most_common_frequency == pd.Timedelta(0) or most_common_frequency.total_seconds() == 0:
+        raise ValueError('Time frequency is zero - all timestamps are identical. Cannot generate date range.')
+
     tolerance = pd.Timedelta(milliseconds=10)
     time_diffs[abs(time_diffs - most_common_frequency) <= tolerance] = most_common_frequency
 
@@ -278,11 +306,21 @@ def time_to_feature(df: pd.DataFrame):
     Creates features for cyclical representations of time to help ML models identify seasonality.
     Cyclic representations are necessary to show that 23:59 is very close to 0:00
     '''
+    # ===== TRACE: Before time_to_feature =====
+    if DEBUG_PAYLOAD_TRACE and isinstance(df.index, pd.DatetimeIndex):
+        unique_before = df.index.nunique()
+        sample_before = list(df.index[:3])
+        _trace_data_utils("TIME_TO_FEATURE_BEFORE", f"unique={unique_before} rows={len(df)} sample={sample_before}")
+    
     df_return = df.copy()
 
     if not isinstance(df.index, pd.DatetimeIndex):
         raise TypeError("DataFrame index must be a DatetimeIndex.")
     
+    # ===== TRACE: After copy =====
+    if DEBUG_PAYLOAD_TRACE:
+        unique_after_copy = df_return.index.nunique()
+        _trace_data_utils("TIME_TO_FEATURE_AFTER_COPY", f"unique={unique_after_copy}")
 
     df_return = (
         df_return
@@ -291,12 +329,23 @@ def time_to_feature(df: pd.DataFrame):
         .assign(day_of_year=df.index.dayofyear)
     )
 
+    # ===== TRACE: After assign =====
+    if DEBUG_PAYLOAD_TRACE:
+        unique_after_assign = df_return.index.nunique()
+        _trace_data_utils("TIME_TO_FEATURE_AFTER_ASSIGN", f"unique={unique_after_assign}")
+
     time_features = {'min_of_day': 1440, 'day_of_week': 7, 'day_of_year': 365.25}
 
     for feature, period in time_features.items():
         df_return[f"{feature}_sin"] = np.sin((df_return[feature]) * (2 * np.pi / period))
         df_return[f"{feature}_cos"] = np.cos((df_return[feature]) * (2 * np.pi / period))
         df_return = df_return.drop(columns=[feature])
+
+    # ===== TRACE: After feature engineering =====
+    if DEBUG_PAYLOAD_TRACE:
+        unique_final = df_return.index.nunique()
+        sample_final = list(df_return.index[:3])
+        _trace_data_utils("TIME_TO_FEATURE_FINAL", f"unique={unique_final} rows={len(df_return)} cols={len(df_return.columns)} sample={sample_final}")
 
     return df_return
 
@@ -322,6 +371,31 @@ def window_data(df: pd.DataFrame, exo_features: Optional[List[str]] = None, inpu
     
     return x, y
 
+def _fix_zero_scale(scaler, scaler_type_name="Scaler"):
+    """
+    Fix division by zero issue in sklearn scalers by replacing zero scale_ values with 1.0.
+    
+    When a feature has zero variance in training data, sklearn sets scale_ to 0.
+    During inverse_transform, it divides by scale_, causing ZeroDivisionError.
+    This function prevents that by replacing 0 with 1.0 (no scaling).
+    
+    Args:
+        scaler: The scaler object to fix (modifies in place)
+        scaler_type_name: Name for logging purposes
+        
+    Returns:
+        The fixed scaler (same object, modified in place)
+    """
+    if hasattr(scaler, 'scale_') and scaler.scale_ is not None:
+        zero_scale_mask = scaler.scale_ == 0
+        if np.any(zero_scale_mask):
+            scaler.scale_ = scaler.scale_.copy()  # Ensure we're not modifying shared array
+            scaler.scale_[zero_scale_mask] = 1.0
+            print(f"[Warning] {scaler_type_name} has {np.sum(zero_scale_mask)} features with zero variance/range (scale_=0). "
+                  f"Replaced with 1.0 to prevent division by zero during inverse_transform.")
+    return scaler
+
+
 def subset_scaler(original_scaler, original_columns, subset_columns):
     """
     Creates a new scaler for a subset of features from an existing fitted scaler.
@@ -336,7 +410,8 @@ def subset_scaler(original_scaler, original_columns, subset_columns):
         A new, configured scaler for the subset of data.
     """
     if original_columns == subset_columns:
-        return original_scaler
+        # Return the original scaler, but fix zero scale_ values first
+        return _fix_zero_scale(original_scaler, scaler_type_name=original_scaler.__class__.__name__)
 
     # Find the integer indices of the subset columns
     subset_indices = [original_columns.index(col) for col in subset_columns]
@@ -348,14 +423,14 @@ def subset_scaler(original_scaler, original_columns, subset_columns):
         else:
             subset.mean_ = None
         if original_scaler.scale_ is not None:
-            subset.scale_ = original_scaler.scale_[subset_indices]
+            subset.scale_ = original_scaler.scale_[subset_indices].copy()
         else:
             subset.scale_ = None
 
     elif isinstance(original_scaler, MinMaxScaler):
         subset = MinMaxScaler()
         subset.min_ = original_scaler.min_[subset_indices]
-        subset.scale_ = original_scaler.scale_[subset_indices]
+        subset.scale_ = original_scaler.scale_[subset_indices].copy()
         subset.data_min_ = original_scaler.data_min_[subset_indices]
         subset.data_max_ = original_scaler.data_max_[subset_indices]
         subset.data_range_ = original_scaler.data_range_[subset_indices]
@@ -363,12 +438,12 @@ def subset_scaler(original_scaler, original_columns, subset_columns):
     elif isinstance(original_scaler, RobustScaler):
         subset = RobustScaler()
         subset.center_ = original_scaler.center_[subset_indices]
-        subset.scale_ = original_scaler.scale_[subset_indices]
+        subset.scale_ = original_scaler.scale_[subset_indices].copy()
 
     elif isinstance(original_scaler, MaxAbsScaler):
         subset = MaxAbsScaler()
         subset.max_abs_ = original_scaler.max_abs_[subset_indices]
-        subset.scale_ = original_scaler.scale_[subset_indices]
+        subset.scale_ = original_scaler.scale_[subset_indices].copy()
 
     else:
         raise TypeError("Unsupported scaler type. This function only supports "
@@ -377,5 +452,8 @@ def subset_scaler(original_scaler, original_columns, subset_columns):
     # Set feature info for scikit-learn validation
     subset.n_features_in_ = len(subset_columns)
     subset.feature_names_in_ = np.array(subset_columns, dtype=object)
+
+    # Fix zero scale_ values to prevent division by zero during inverse_transform
+    _fix_zero_scale(subset, scaler_type_name=subset.__class__.__name__)
 
     return subset

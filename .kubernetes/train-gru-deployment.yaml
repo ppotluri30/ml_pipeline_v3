@@ -1,0 +1,89 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    kompose.cmd: C:\ProgramData\chocolatey\lib\kubernetes-kompose\tools\kompose.exe convert
+    kompose.version: 1.36.0 (ae2a39403)
+  labels:
+    io.kompose.service: train-gru
+  name: train-gru
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      io.kompose.service: train-gru
+  template:
+    metadata:
+      annotations:
+        kompose.cmd: C:\ProgramData\chocolatey\lib\kubernetes-kompose\tools\kompose.exe convert
+        kompose.version: 1.36.0 (ae2a39403)
+      labels:
+        io.kompose.service: train-gru
+    spec:
+      initContainers:
+        - name: wait-for-kafka
+          image: busybox:1.36
+          command: ['sh', '-c', 'echo Waiting for Kafka...; while ! nc -z kafka 9092; do sleep 1; done; echo Kafka is up!']
+      containers:
+        - env:
+            - name: AWS_ACCESS_KEY_ID
+              value: minioadmin
+            - name: AWS_SECRET_ACCESS_KEY
+              value: minioadmin
+            - name: AWS_S3_ADDRESSING_STYLE
+              value: path
+            - name: AWS_DEFAULT_REGION
+              value: us-east-1
+            - name: CONSUMER_GROUP_ID
+              value: train-gru
+            - name: CONSUMER_TOPIC
+              value: training-data
+            - name: GATEWAY_URL
+              value: http://fastapi-app:8000
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: kafka:9092
+            - name: MLFLOW_S3_ENDPOINT_URL
+              value: http://minio:9000
+            - name: MLFLOW_TRACKING_URI
+              value: http://mlflow:5000
+            - name: PRODUCER_TOPIC
+              value: model-training
+            - name: MODEL_TYPE
+              value: GRU
+            - name: TRAIN_TEST_SPLIT
+              value: "0.8"
+            - name: INPUT_SEQ_LEN
+              value: "10"
+            - name: OUTPUT_SEQ_LEN
+              value: "1"
+            - name: HIDDEN_SIZE
+              value: "128"
+            - name: NUM_LAYERS
+              value: "2"
+            - name: BATCH_SIZE
+              value: "64"
+            - name: EPOCHS
+              value: "10"
+            - name: EARLY_STOPPING
+              value: "True"
+            - name: PATIENCE
+              value: "30"
+            - name: LEARNING_RATE
+              value: "1e-4"
+            - name: FAILURE_MAX_RETRIES
+              value: "3"
+            - name: ENABLE_XAI
+              value: "false"
+            - name: DEFAULT_CONFIG_HASH
+              value: baseline
+            - name: SKIP_DUPLICATE_CONFIGS
+              value: "1"
+            - name: DUP_CACHE_MAX
+              value: "500"
+          image: train:latest
+          imagePullPolicy: IfNotPresent
+          name: train-gru
+          ports:
+            - containerPort: 8021
+              protocol: TCP
+      restartPolicy: Always

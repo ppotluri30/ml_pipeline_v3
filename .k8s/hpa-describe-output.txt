@@ -1,0 +1,33 @@
+﻿Name:                                                  inference
+Namespace:                                             default
+Labels:                                                app=inference
+Annotations:                                           <none>
+CreationTimestamp:                                     Tue, 04 Nov 2025 13:46:18 -0800
+Reference:                                             Deployment/inference
+Metrics:                                               ( current / target )
+  resource cpu on pods  (as a percentage of request):  57% (576m) / 70%
+Min replicas:                                          2
+Max replicas:                                          20
+Behavior:
+  Scale Up:
+    Stabilization Window: 0 seconds
+    Select Policy: Max
+    Policies:
+      - Type: Pods     Value: 4    Period: 15 seconds
+      - Type: Percent  Value: 100  Period: 15 seconds
+  Scale Down:
+    Stabilization Window: 60 seconds
+    Select Policy: Min
+    Policies:
+      - Type: Pods  Value: 1  Period: 60 seconds
+Deployment pods:    2 current / 2 desired
+Conditions:
+  Type            Status  Reason              Message
+  ----            ------  ------              -------
+  AbleToScale     True    ReadyForNewScale    recommended size matches current size
+  ScalingActive   True    ValidMetricFound    the HPA was able to successfully calculate a replica count from cpu resource utilization (percentage of request)
+  ScalingLimited  False   DesiredWithinRange  the desired count is within the acceptable range
+Events:
+  Type    Reason             Age    From                       Message
+  ----    ------             ----   ----                       -------
+  Normal  SuccessfulRescale  5m55s  horizontal-pod-autoscaler  New size: 2; reason: Current number of replicas below Spec.MinReplicas

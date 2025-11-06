@@ -1,0 +1,68 @@
+---
+# ConfigMap containing the Locust test file
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: locust-scripts
+  namespace: default
+data:
+  locustfile.py: |
+    """
+    Kubernetes-optimized Locust load test for FLTS inference service
+    """
+    from locust import HttpUser, task, between
+    import json
+    import os
+    
+    class InferenceUser(HttpUser):
+        wait_time = between(0.5, 2.0)
+        
+        # Minimal valid payload for inference
+        predict_payload = {
+            "data": {
+                "ts": ["2018-02-06 00:00:00"] * 30,
+                "down": [109934672.0] * 30,
+                "up": [41703548.0] * 30,
+                "rnti_count": [96.0] * 30,
+                "mcs_down": [18.52] * 30,
+                "mcs_down_var": [15.31] * 30,
+                "mcs_up": [15.93] * 30,
+                "mcs_up_var": [22.03] * 30,
+                "rb_down": [37.61] * 30,
+                "rb_down_var": [19.99] * 30,
+                "rb_up": [9.08] * 30,
+                "rb_up_var": [8.99] * 30
+            }
+        }
+        
+        @task(8)
+        def predict(self):
+            """Main prediction task - 80% weight"""
+            with self.client.post(
+                "/predict",
+                json=self.predict_payload,
+                catch_response=True,
+                name="/predict"
+            ) as response:
+                if response.status_code == 200:
+                    response.success()
+                else:
+                    response.failure(f"Got status {response.status_code}")
+        
+        @task(1)
+        def health_check(self):
+            """Health check - 10% weight"""
+            with self.client.get("/healthz", catch_response=True, name="/healthz") as response:
+                if response.status_code == 200:
+                    response.success()
+                else:
+                    response.failure(f"Got status {response.status_code}")
+        
+        @task(1)
+        def metrics_check(self):
+            """Metrics endpoint - 10% weight"""
+            with self.client.get("/metrics", catch_response=True, name="/metrics") as response:
+                if response.status_code == 200:
+                    response.success()
+                else:
+                    response.failure(f"Got status {response.status_code}")

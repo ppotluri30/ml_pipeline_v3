@@ -1,0 +1,155 @@
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: inference-slo-hpa
+  namespace: default
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: inference
+  
+  minReplicas: 3
+  maxReplicas: 20
+  
+  # Scaling behavior configuration
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 60  # Wait 60s before scaling up again
+      policies:
+      - type: Pods
+        value: 2
+        periodSeconds: 30  # Add 2 pods every 30s
+      - type: Percent
+        value: 50
+        periodSeconds: 30  # Or add 50% of current pods every 30s
+      selectPolicy: Max  # Use the policy that scales up faster
+    
+    scaleDown:
+      stabilizationWindowSeconds: 300  # Wait 5 minutes before scaling down
+      policies:
+      - type: Pods
+        value: 1
+        periodSeconds: 60  # Remove 1 pod every 60s
+      - type: Percent
+        value: 10
+        periodSeconds: 120  # Or remove 10% every 120s  
+      selectPolicy: Min  # Use the policy that scales down slower
+  
+  # Metrics for autoscaling (OR semantics - scale if ANY threshold is exceeded)
+  metrics:
+  
+  # Metric 1: P95 Latency (SLO target: 350ms)
+  - type: Pods
+    pods:
+      metric:
+        name: http_request_duration_p95
+      target:
+        type: AverageValue
+        averageValue: "350m"  # 350 milliseconds
+  
+  # Metric 2: In-flight requests per pod (target: 10 concurrent requests)
+  - type: Pods
+    pods:
+      metric:
+        name: http_requests_in_flight
+      target:
+        type: AverageValue
+        averageValue: "10"
+  
+  # Metric 3: CPU utilization (backstop - only scales if > 80%)
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 80
+
+---
+# ServiceMonitor for Prometheus to scrape inference metrics
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: inference-metrics
+  namespace: default
+  labels:
+    app: inference
+spec:
+  selector:
+    matchLabels:
+      app: inference
+  endpoints:
+  - port: metrics
+    interval: 15s
+    path: /metrics
+    scheme: http
+
+---
+# Prometheus rules for SLO metrics
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: inference-slo-rules
+  namespace: default
+  labels:
+    app: inference
+spec:
+  groups:
+  - name: inference_slo_metrics
+    interval: 15s
+    rules:
+    
+    # P95 latency per pod (for HPA)
+    - record: http_request_duration_p95:pod
+      expr: |
+        histogram_quantile(0.95,
+          sum by (pod) (
+            rate(http_request_duration_seconds_bucket{endpoint="/predict"}[1m])
+          )
+        )
+    
+    # In-flight requests per pod (for HPA)
+    - record: http_requests_in_flight:pod
+      expr: |
+        sum by (pod) (
+          http_requests_in_flight{endpoint="/predict"}
+        )
+    
+    # Request rate per pod
+    - record: http_requests_per_second:pod
+      expr: |
+        sum by (pod) (
+          rate(http_requests_total{endpoint="/predict"}[1m])
+        )
+    
+    # Error rate percentage
+    - record: http_error_rate:percentage
+      expr: |
+        100 * (
+          sum(rate(http_request_errors_total{endpoint="/predict"}[1m]))
+          /
+          sum(rate(http_requests_total{endpoint="/predict"}[1m]))
+        )
+    
+    # SLO breach alert (P95 > 350ms for 2 minutes)
+    - alert: InferenceLatencySLOBreach
+      expr: http_request_duration_p95:pod > 0.350
+      for: 2m
+      labels:
+        severity: warning
+        slo: latency
+      annotations:
+        summary: "Inference P95 latency exceeds SLO target"
+        description: "Pod {{ $labels.pod }} has P95 latency {{ $value }}s (target: 0.350s)"
+    
+    # High error rate alert (> 1% for 5 minutes)
+    - alert: InferenceHighErrorRate
+      expr: http_error_rate:percentage > 1
+      for: 5m
+      labels:
+        severity: critical
+        slo: availability
+      annotations:
+        summary: "Inference error rate exceeds threshold"
+        description: "Error rate is {{ $value }}% (threshold: 1%)"

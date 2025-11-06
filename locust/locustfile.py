@@ -175,6 +175,8 @@ def _build_synthetic_predict_payload(
     """Construct a schema-aligned synthetic payload for /predict.
 
     The column order mirrors the numeric network metrics used during training.
+    CRITICAL: Ensures unique, monotonically increasing timestamps to avoid
+    'Time frequency is zero' errors during high-concurrency inference.
     """
     rows_needed = max(input_len + max(output_len, 1) + 5, 16)
     total = total_rows if total_rows is not None else rows_needed
@@ -185,9 +187,30 @@ def _build_synthetic_predict_payload(
         if t0.tzinfo is None:
             t0 = t0.replace(tzinfo=dt.timezone.utc)
         t0 = t0.astimezone(dt.timezone.utc).replace(microsecond=0)
+    
+    # CRITICAL FIX: Ensure freq_minutes is always >= 1 to guarantee unique timestamps
     step = max(1, int(freq_minutes))
+    
+    # Generate unique timestamps with guaranteed spacing
     times_dt = [t0 + dt.timedelta(minutes=i * step) for i in range(total)]
-    times = [ts.replace(tzinfo=None).isoformat() for ts in times_dt]
+    
+    # CRITICAL: Use explicit format to ensure pandas can parse correctly
+    # Format: "YYYY-MM-DDTHH:MM:SS" without microseconds or timezone
+    times = [ts.strftime("%Y-%m-%dT%H:%M:%S") for ts in times_dt]
+    
+    # Verify uniqueness (debug assertion)
+    if len(times) != len(set(times)):
+        raise ValueError(f"Generated {len(times)} timestamps but only {len(set(times))} are unique!")
+    
+    # ===== DIAGNOSTIC LOGGING =====
+    DEBUG_ENABLED = os.getenv("DEBUG_LOCUST_PAYLOAD", "0") in {"1", "true", "TRUE"}
+    if DEBUG_ENABLED:
+        print(f"[LOCUST_GENERATE] Generated {len(times)} timestamps")
+        print(f"[LOCUST_GENERATE] Unique count: {len(set(times))}")
+        print(f"[LOCUST_GENERATE] Sample: {times[:3]}")
+        print(f"[LOCUST_GENERATE] Field name will be: 'time'")
+    # ===== END DIAGNOSTIC LOGGING =====
+    
     base_seq = [float(i % 50) for i in range(total)]
     down_series = [v * 1_000_000.0 + 5_000_000.0 for v in base_seq]
     data = {
@@ -226,25 +249,53 @@ def _update_predict_context(input_len: int, output_len: int, has_df: bool):
 
 
 def _should_use_cached_predicts() -> bool:
-    if PREDICT_PAYLOAD_MODE == "cached":
-        return True
-    if PREDICT_PAYLOAD_MODE == "synthetic":
-        return False
-    if not _predict_cache_enabled:
-        return False
-    return _predict_has_df
+    """INFERENCE CACHING DISABLED: Always generate synthetic payloads with real data.
+    
+    This ensures every /predict request contains valid model input data,
+    regardless of PREDICT_PAYLOAD_MODE or cache flags.
+    """
+    # Force synthetic mode - never use empty cached payloads
+    return False
 
 
 def _next_predict_payload() -> dict:
-    if _should_use_cached_predicts():
-        return {}
+    """Generate next prediction payload with unique timestamps.
+    
+    ALWAYS generates synthetic payloads with real data - caching disabled.
+    Every request will contain valid model input with all required features.
+    """
     global _predict_payload_seq
     with _predict_payload_lock:
         seq = _predict_payload_seq
         _predict_payload_seq += 1
     # Space out timestamps by output window length to mimic rolling horizon
+    # CRITICAL: Use sequential minutes offset to ensure globally unique base times
     base_time = dt.datetime.now(dt.timezone.utc).replace(microsecond=0) + dt.timedelta(minutes=seq * max(1, _predict_output_len))
-    return _build_synthetic_predict_payload(_predict_input_len, _predict_output_len, base_time=base_time)
+    
+    # Generate synthetic payload with guaranteed unique timestamps
+    payload = _build_synthetic_predict_payload(_predict_input_len, _predict_output_len, base_time=base_time)
+    
+    # Confirm we're generating real data
+    DEBUG_ENABLED = os.getenv("DEBUG_LOCUST_PAYLOAD", "0") in {"1", "true", "TRUE"}
+    if DEBUG_ENABLED and seq < 3:
+        data_keys = list(payload.get("data", {}).keys()) if "data" in payload else []
+        data_rows = len(payload.get("data", {}).get("time", [])) if "data" in payload else 0
+        print(f"[LOCUST_PAYLOAD_GEN] seq={seq} mode=SYNTHETIC_ONLY data_keys={data_keys} rows={data_rows}")
+    
+    # DEBUG: Print payload structure for first few requests
+    if seq < 2 and os.getenv("DEBUG_LOCUST_PAYLOAD", "0") == "1":
+        import json
+        print(f"[LOCUST_DEBUG] Payload seq={seq}:")
+        print(f"  index_col: {payload.get('index_col')}")
+        print(f"  data keys: {list(payload.get('data', {}).keys())}")
+        print(f"  first 3 times: {payload.get('data', {}).get('time', [])[:3]}")
+    
+    # Optional: Log first payload for debugging
+    if seq == 0 and os.getenv("DEBUG_LOCUST_PAYLOAD", "0") == "1":
+        import json
+        print(f"[DEBUG] First synthetic payload: {json.dumps(payload, indent=2)[:500]}")
+    
+    return payload
 
 
 def _run_preflight_predict_check(environment, input_len: int, output_len: int, has_df: bool):
@@ -293,141 +344,38 @@ def _is_headless():
 
 @events.test_start.add_listener
 def on_test_start(environment, **kw):  # noqa: D401
-    # In headless mode, ensure at least one user executes warm-up immediately.
+    """
+    SIMPLIFIED TEST START - No warmup, no health checks, no ping.
+    
+    Both UI and headless modes start immediately with valid predict requests.
+    """
     global _headless_auto_started
     if _headless_auto_started:
         return
     _headless_auto_started = True
-    # Warm-up: ping health endpoint, then sleep briefly before spawning load to avoid early connection churn.
+    
     _append_jsonl({
         "ts": time.time(),
-        "event": "headless_test_start",
+        "event": "test_start_unified",
+        "mode": "UI_AND_HEADLESS_IDENTICAL",
     })
-    try:
-        import requests  # local import to avoid global dependency
-        health_url = EP_HEALTH if EP_HEALTH.startswith("http") else f"{_predict_host}{EP_HEALTH}"
-        ok = False
-        # Quick initial probes (fast-fail if service totally down)
-        for i in range(1, 4):
-            try:
-                resp = requests.get(health_url, timeout=5)
-                ok = resp.status_code == 200
-            except Exception:
-                ok = False
-            _append_jsonl({
-                "ts": time.time(),
-                "event": "warmup_health_attempt",
-                "attempt": i,
-                "ok": ok
-            })
-            if ok:
-                break
-            time.sleep(1.0)
-
-        # If requested, wait until the inference model reports ready via /healthz.model_ready
-        # CONTROL via env: LOCUST_WAIT_FOR_MODEL (default: true), and timeout LOCUST_WAIT_FOR_MODEL_TIMEOUT (seconds)
-        wait_for_model = os.getenv("LOCUST_WAIT_FOR_MODEL", "1") not in {"0", "false", "FALSE"}
-        wait_timeout = float(os.getenv("LOCUST_WAIT_FOR_MODEL_TIMEOUT", "60"))
-        if wait_for_model:
-            t_deadline = time.time() + wait_timeout
-            model_ready = False
-            # If earlier quick probes succeeded, still verify model_ready flag
-            while time.time() < t_deadline:
-                try:
-                    resp = requests.get(health_url, timeout=5)
-                    if resp is not None and resp.status_code == 200:
-                        try:
-                            js = resp.json()
-                            model_ready = bool(js.get("model_ready"))
-                        except Exception:
-                            model_ready = False
-                    else:
-                        model_ready = False
-                except Exception:
-                    model_ready = False
-                _append_jsonl({
-                    "ts": time.time(),
-                    "event": "warmup_model_ready_check",
-                    "model_ready": model_ready,
-                    "time_left": max(0.0, round(t_deadline - time.time(), 2))
-                })
-                if model_ready:
-                    break
-                time.sleep(1.0)
-            if not model_ready:
-                _append_jsonl({
-                    "ts": time.time(),
-                    "event": "warmup_model_ready_timeout",
-                    "wait_timeout": wait_timeout
-                })
-
-        # Small settle delay regardless of health result
-        time.sleep(2.0)
-
-        in_len, out_len, has_df = _resolve_predict_lengths()
-        _append_jsonl({
-            "ts": time.time(),
-            "event": "predict_ping_snapshot",
-            "input_seq_len": in_len,
-            "output_seq_len": out_len,
-            "has_df": has_df,
-        })
-        if not _run_preflight_predict_check(environment, in_len, out_len, has_df):
-            return
-    except Exception as e:
-        _append_jsonl({
-            "ts": time.time(),
-            "event": "warmup_error",
-            "error": str(e)
-        })
-    # Optionally trigger a Kafka burst to exercise consumer backpressure
-    try:
-        if KAFKA_BURST and KAFKA_BURST_COUNT > 0:
-            payload = {
-                "count": KAFKA_BURST_COUNT,
-            }
-            if KAFKA_BURST_TTL_MS:
-                try:
-                    payload["ttl_ms"] = int(KAFKA_BURST_TTL_MS)
-                except Exception:
-                    pass
-            if KAFKA_BURST_KEY_PREFIX:
-                payload["key_prefix"] = KAFKA_BURST_KEY_PREFIX
-            import requests  # only used here to avoid adding to common path
-            resp = requests.post(_predict_publish_url, json=payload, timeout=30)
-            _append_jsonl({
-                "ts": time.time(),
-                "event": "kafka_burst_triggered",
-                "status_code": getattr(resp, "status_code", None),
-                "response": None if resp is None else resp.text[:200],
-            })
-            # Wait for background inference to run once so cached fast path is available
-            try:
-                ping = _predict_ping_url
-                t_end = time.time() + 6.0
-                seen_busy = False
-                while time.time() < t_end:
-                    try:
-                        pr = requests.get(ping, timeout=2)
-                        js = pr.json() if pr is not None else {}
-                        has_df = bool(js.get("has_df"))
-                        busy = bool(js.get("busy"))
-                        if busy:
-                            seen_busy = True
-                        if has_df and (not busy) and seen_busy:
-                            _append_jsonl({"ts": time.time(), "event": "post_burst_ready", "has_df": has_df})
-                            break
-                    except Exception:
-                        pass
-                    time.sleep(0.25)
-            except Exception:
-                pass
-    except Exception as e:
-        _append_jsonl({
-            "ts": time.time(),
-            "event": "kafka_burst_error",
-            "error": str(e),
-        })
+    
+    # Mark predict as ready globally
+    globals()["_predict_ready"] = True
+    
+    # Resolve sequence lengths from environment or use defaults
+    in_len = int(os.getenv("PREDICT_INPUT_LEN", "10"))
+    out_len = int(os.getenv("PREDICT_OUTPUT_LEN", "1"))
+    _update_predict_context(in_len, out_len, False)
+    
+    _append_jsonl({
+        "ts": time.time(),
+        "event": "predict_config",
+        "input_seq_len": in_len,
+        "output_seq_len": out_len,
+        "payload_mode": "SYNTHETIC_ONLY",
+        "caching_disabled": True,
+    })
 
 _log_file_lock = threading.Lock()
 
@@ -452,24 +400,16 @@ def _append_jsonl(record: dict):
 
 @events.request.add_listener
 def log_request(request_type, name, response_time, response_length, response, context, exception, **kw):  # noqa: D401
-    """Selective logging:
-    - Suppress predict noise until warm-up succeeds.
-    - After ready, log only successful (200) predict requests.
-    - Always log health/download.
+    """
+    SIMPLIFIED REQUEST LOGGING - All predict requests are logged consistently.
+    
+    No warmup state checks, no mode-specific filtering.
     """
     try:
         status_code = getattr(response, "status_code", None) if response else None
+        
         if name == "predict":
-            # If predict not ready, optionally record as skipped
-            if not _predict_ready and LOG_PREDICT_ALL:
-                _append_jsonl({
-                    "ts": time.time(),
-                    "request_type": request_type,
-                    "name": name,
-                    "skipped": True,
-                    "reason": "predict_not_ready"
-                })
-                return
+            # Always log predict requests (success or failure)
             log_this = False
             if LOG_PREDICT_ALL:
                 log_this = True
@@ -477,8 +417,10 @@ def log_request(request_type, name, response_time, response_length, response, co
                 log_this = True
             elif LOG_PREDICT_ERRORS and (exception or (status_code and status_code >= 400)):
                 log_this = True
+            
             if not log_this:
                 return
+            
             body_snip = None
             if LOG_PREDICT_RESPONSE_CHARS > 0 and response is not None:
                 try:
@@ -489,9 +431,11 @@ def log_request(request_type, name, response_time, response_length, response, co
                         body_snip = txt
                 except Exception:
                     body_snip = None
+            
             payload = None
             if LOG_PREDICT_PAYLOAD and context and isinstance(context, dict):
                 payload = context.get("request_json")
+            
             rec = {
                 "ts": time.time(),
                 "request_type": request_type,
@@ -506,6 +450,7 @@ def log_request(request_type, name, response_time, response_length, response, co
                 rec["payload"] = payload
             _append_jsonl(rec)
         else:
+            # Log all other requests
             _append_jsonl({
                 "ts": time.time(),
                 "request_type": request_type,
@@ -519,8 +464,14 @@ def log_request(request_type, name, response_time, response_length, response, co
 
 
 class PipelineUser(HttpUser):
-    """User model focused on inference performance (predict 80%, health 10%, download 10%)."""
-    host = _predict_host
+    """
+    UNIFIED USER MODEL - Works identically in UI and headless modes.
+    
+    The host attribute MUST be just the base URL (scheme + netloc) without any path.
+    All paths are specified in the request methods (e.g., self.client.post('/predict', ...))
+    """
+    # Extract just the base URL (no path) for proper Locust HttpUser behavior
+    host = _predict_host  # This is already just scheme://netloc from URL parsing above
     wait_time = between(_user_wait_min, _user_wait_max)
 
 
@@ -659,9 +610,15 @@ class PipelineUser(HttpUser):
                 pass
 
     def on_start(self):
+        """
+        SIMPLIFIED USER INITIALIZATION - No warmup, no ping, no health checks.
+        
+        Just log the configuration and start sending predict requests immediately.
+        This ensures UI and headless modes behave identically.
+        """
         global _session_header_written
         if not _session_header_written:
-            # Optionally truncate log file to avoid historical noise (legacy 'inference-discovery' entries, etc.)
+            # Optionally truncate log file to avoid historical noise
             if TRUNCATE_ON_START:
                 try:
                     open(LOG_FILE, "w").close()
@@ -673,60 +630,99 @@ class PipelineUser(HttpUser):
                 "run_id": RUN_ID,
             })
             _session_header_written = True
+        
         _append_jsonl({
             "ts": time.time(),
             "event": "config_snapshot",
             "run_id": RUN_ID,
-            "ep_health": EP_HEALTH,
-            "ep_download": EP_DOWNLOAD,
-            "ep_download_alt": EP_DOWNLOAD_ALT,
-            "gateway_base": GATEWAY_BASE,
             "predict_url": PREDICT_URL,
             "predict_host": _predict_host,
             "predict_path": _predict_request_path,
-            "predict_warmup_removed": True,
-            "download_warmup_attempts": DOWNLOAD_WARMUP_ATTEMPTS,
-            "predict_payload_mode": PREDICT_PAYLOAD_MODE,
-            "predict_cache_enabled": _predict_cache_enabled,
+            "predict_warmup_disabled": True,
+            "predict_payload_mode": "SYNTHETIC_ONLY",
+            "predict_cache_disabled": True,
+            "mode": "UNIFIED_UI_AND_HEADLESS",
         })
-        # Warm health once (ignored errors)
-        try:
-            self.client.get(EP_HEALTH, name="healthz-warm")
-        except Exception:
-            pass
-        # Perform predict warm-up once globally to seed cache and avoid 400s for empty-body requests
-        if PREDICT_WARMUP_DISABLE:
-            # Skip warmup entirely (assumes service.df is preloaded via claim-check)
-            # If already warmed, mark ready for this user
-            in_len, out_len, has_df = _resolve_predict_lengths()
-            _update_predict_context(in_len, out_len, has_df)
-            globals()["_predict_ready"] = True
-        elif not _warmup_done:
-            self._predict_warmup()
-        else:
-            globals()["_predict_ready"] = True
-        self._download_warmup()
-        # Per-user ramp delay to avoid initial 429s and transport churn
-        try:
-            delay = random.uniform(5.0, 10.0)
-            _append_jsonl({
-                "ts": time.time(),
-                "event": "user_ramp_delay",
-                "seconds": round(delay, 3)
-            })
-            time.sleep(delay)
-        except Exception:
-            pass
+        
+        # Mark predict as ready immediately (no warmup needed)
+        globals()["_predict_ready"] = True
+        
+        # Resolve sequence lengths from environment or use defaults
+        in_len = int(os.getenv("PREDICT_INPUT_LEN", "10"))
+        out_len = int(os.getenv("PREDICT_OUTPUT_LEN", "1"))
+        _update_predict_context(in_len, out_len, False)
+        
+        # No warmup, no health checks, no download tests - go straight to predict tasks
 
-    @task(80)
+    @task(100)
     def predict(self):
-        if not _predict_ready:
-            # Try a lightweight warm-up retry in case this user started before cache was primed
-            self._predict_warmup()
-            return
+        """
+        UNIFIED PREDICT TASK - Works identically in UI and headless modes.
+        
+        Always generates valid synthetic payloads with real data.
+        No warmup, no ping, no caching - just pure /predict requests.
+        """
         payload = _next_predict_payload()
+        
+        # ===== ENHANCED DIAGNOSTIC LOGGING =====
+        global _predict_payload_seq
+        DEBUG_ENABLED = os.getenv("DEBUG_LOCUST_PAYLOAD", "0") in {"1", "true", "TRUE"}
+        ALWAYS_LOG_FIRST = os.getenv("LOCUST_ALWAYS_LOG_FIRST", "1") in {"1", "true", "TRUE"}
+        
+        if (_predict_payload_seq < 5 and ALWAYS_LOG_FIRST) or DEBUG_ENABLED:
+            import json
+            # Log payload structure
+            has_data = bool(payload.get("data"))
+            data_keys = list(payload.get("data", {}).keys()) if has_data else []
+            
+            print(f"\n{'='*80}")
+            print(f"[LOCUST_SENDING] seq={_predict_payload_seq} has_data={has_data}")
+            print(f"[LOCUST_SENDING] data_keys={data_keys}")
+            print(f"[LOCUST_SENDING] inference_length={payload.get('inference_length')}")
+            print(f"[LOCUST_SENDING] index_col={payload.get('index_col')}")
+            
+            # Check for timestamp fields
+            if has_data:
+                data = payload["data"]
+                ts_field = None
+                ts_sample = None
+                ts_unique = None
+                ts_total = None
+                
+                for field in ["time", "ts", "timestamp", "date"]:
+                    if field in data:
+                        ts_field = field
+                        ts_values = data[field]
+                        ts_total = len(ts_values) if isinstance(ts_values, list) else "?"
+                        ts_unique = len(set(ts_values)) if isinstance(ts_values, list) else "?"
+                        ts_sample = ts_values[:5] if isinstance(ts_values, list) else str(ts_values)[:100]
+                        break
+                
+                if ts_field:
+                    print(f"[LOCUST_SENDING] ✅ FOUND timestamp_field='{ts_field}'")
+                    print(f"[LOCUST_SENDING]    total={ts_total} unique={ts_unique}")
+                    print(f"[LOCUST_SENDING]    sample={ts_sample}")
+                else:
+                    print(f"[LOCUST_SENDING] ❌ NO timestamp field found in {data_keys}")
+            
+            # Log raw JSON preview
+            json_str = json.dumps(payload, default=str)
+            print(f"[LOCUST_SENDING] json_preview={json_str[:500]}...")
+            print(f"[LOCUST_SENDING] json_length={len(json_str)} bytes")
+            print(f"[LOCUST_SENDING] target_url={_predict_request_path}")
+            print(f"{'='*80}\n")
+        # ===== END ENHANCED DIAGNOSTIC LOGGING =====
+        
         try:
             r = self.client.post(_predict_request_path, json=payload, name="predict")
+            
+            # Log response status for first few requests
+            if (_predict_payload_seq < 5 and ALWAYS_LOG_FIRST) or DEBUG_ENABLED:
+                status = r.status_code if r else "NO_RESPONSE"
+                print(f"[LOCUST_RESPONSE] seq={_predict_payload_seq} status={status}")
+                if r and r.status_code >= 400:
+                    print(f"[LOCUST_RESPONSE] error_body={r.text[:300]}")
+            
             if LOG_PREDICT_PAYLOAD:
                 if not hasattr(r, "context"):
                     try:
@@ -737,20 +733,14 @@ class PipelineUser(HttpUser):
                     r.context["request_json"] = payload
                 except Exception:
                     pass
-        except Exception:
+        except Exception as exc:
+            if DEBUG_ENABLED or (_predict_payload_seq < 5 and ALWAYS_LOG_FIRST):
+                print(f"[LOCUST_ERROR] seq={_predict_payload_seq} exception={exc}")
             pass
 
-    @task(10)
-    def health(self):
-        self.client.get(EP_HEALTH, name="healthz")
-
-    @task(10)
-    def download_processed(self):
-        if not _download_ready:
-            return
-        # Use the active URL determined during warmup; if missing fallback to primary.
-        url = _download_active_url or EP_DOWNLOAD
-        self.client.get(url, name="download_processed")
+    # ===== REMOVED TASKS - /healthz and /download_processed disabled =====
+    # These tasks have been removed to ensure 100% focus on /predict requests.
+    # Both UI and headless modes now only execute predict() task.
 
 
 __all__ = ["PipelineUser"]

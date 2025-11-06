@@ -1,0 +1,16 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: inference
+spec:
+  template:
+    spec:
+      containers:
+        - name: inference
+          env:
+            - name: DEBUG_PAYLOAD_TRACE
+              value: "1"
+            - name: PREDICT_PAYLOAD_MODE
+              value: "auto"
+            - name: ENABLE_PREDICT_CACHE
+              value: "0"

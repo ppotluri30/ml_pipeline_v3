@@ -284,6 +284,30 @@ def window_data(df: pd.DataFrame, exo_features: Optional[List[str]] = None, inpu
     
     return x, y
 
+def _fix_zero_scale(scaler, scaler_type_name="Scaler"):
+    """
+    Fix division by zero issue in sklearn scalers by replacing zero scale_ values with 1.0.
+    
+    When a feature has zero variance in training data, sklearn sets scale_ to 0.
+    During inverse_transform, it divides by scale_, causing ZeroDivisionError.
+    This function prevents that by replacing 0 with 1.0 (no scaling).
+    
+    Args:
+        scaler: The scaler object to fix (modifies in place)
+        scaler_type_name: Name for logging purposes
+        
+    Returns:
+        The fixed scaler (same object, modified in place)
+    """
+    if hasattr(scaler, 'scale_') and scaler.scale_ is not None:
+        zero_scale_mask = scaler.scale_ == 0
+        if np.any(zero_scale_mask):
+            scaler.scale_ = scaler.scale_.copy()  # Ensure we're not modifying shared array
+            scaler.scale_[zero_scale_mask] = 1.0
+            print(f"[Warning] {scaler_type_name} has {np.sum(zero_scale_mask)} features with zero variance/range (scale_=0). "
+                  f"Replaced with 1.0 to prevent division by zero during inverse_transform.")
+    return scaler
+
 def subset_scaler(original_scaler, original_columns, subset_columns):
     """
     Creates a new scaler for a subset of features from an existing fitted scaler.
@@ -339,5 +363,8 @@ def subset_scaler(original_scaler, original_columns, subset_columns):
     # Set feature info for scikit-learn validation
     subset.n_features_in_ = len(subset_columns)
     subset.feature_names_in_ = np.array(subset_columns, dtype=object)
+
+    # Fix any zero scale values to prevent division by zero
+    _fix_zero_scale(subset, scaler_type_name=subset.__class__.__name__)
 
     return subset

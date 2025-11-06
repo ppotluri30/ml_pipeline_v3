@@ -1,0 +1,180 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: inference
+  labels:
+    app: inference
+    version: v1
+spec:
+  replicas: 3  # Start with 3 replicas (HPA will manage this)
+  selector:
+    matchLabels:
+      app: inference
+  template:
+    metadata:
+      labels:
+        app: inference
+        version: v1
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
+    spec:
+      initContainers:
+      - name: wait-for-kafka
+        image: busybox:1.36
+        command: ['sh', '-c', 'echo Waiting for Kafka...; while ! nc -z kafka 9092; do sleep 1; done; echo Kafka is up!']
+      
+      containers:
+      - name: inference
+        image: inference:slo-v1
+        imagePullPolicy: IfNotPresent
+        
+        ports:
+        - name: http
+          containerPort: 8000
+          protocol: TCP
+        - name: metrics
+          containerPort: 8000  # Metrics exposed on same port as /metrics endpoint
+          protocol: TCP
+        
+        env:
+        # Kafka configuration
+        - name: KAFKA_BOOTSTRAP_SERVERS
+          value: "kafka:9092"
+        - name: CONSUMER_GROUP_ID
+          value: "batch-forecasting"
+        - name: CONSUMER_TOPIC_0
+          value: "inference-data"
+        - name: CONSUMER_TOPIC_1
+          value: "model-training"
+        - name: PRODUCER_TOPIC
+          value: "performance-eval"
+        
+        # MLflow configuration
+        - name: MLFLOW_TRACKING_URI
+          value: "http://mlflow:5000"
+        - name: MLFLOW_S3_ENDPOINT_URL
+          value: "http://minio:9000"
+        
+        # MinIO configuration
+        - name: AWS_ACCESS_KEY_ID
+          value: "minioadmin"
+        - name: AWS_SECRET_ACCESS_KEY
+          value: "minioadmin"
+        - name: GATEWAY_URL
+          value: "http://fastapi-app:8000"
+        
+        # Performance tuning
+        - name: PREDICT_MAX_CONCURRENCY
+          value: "16"  # Increase from default (usually 4-8) to handle more concurrent requests
+        - name: UVICORN_WORKERS
+          value: "2"  # Multiple uvicorn workers for better CPU utilization
+        - name: PREWARM_MODEL
+          value: "1"  # Ensure model is loaded at startup
+        - name: ENABLE_PREDICT_CACHE
+          value: "0"  # Disable caching for consistent behavior
+        
+        # Additional inference configuration
+        - name: DEBUG_PAYLOAD_TRACE
+          value: "0"
+        - name: PREDICT_PAYLOAD_MODE
+          value: "service"
+        - name: INFERENCE_START_IN_APP
+          value: "1"
+        
+        # Readiness configuration
+        - name: READINESS_CHECK_MODEL
+          value: "1"  # Only mark ready when model is loaded
+        
+        # Resource requests and limits (required for HPA CPU metrics)
+        resources:
+          requests:
+            memory: "2Gi"
+            cpu: "500m"  # 0.5 CPU cores
+          limits:
+            memory: "4Gi"
+            cpu: "2000m"  # 2 CPU cores
+        
+        # Readiness probe - requires model to be loaded
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          successThreshold: 1
+          failureThreshold: 3
+        
+        # Liveness probe - check if service is responsive
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 5
+          successThreshold: 1
+          failureThreshold: 3
+        
+        # Startup probe - allow time for model loading
+        startupProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 5
+          successThreshold: 1
+          failureThreshold: 12  # 120 seconds max startup time
+      
+      # Pod anti-affinity for better distribution
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - inference
+              topologyKey: kubernetes.io/hostname
+      
+      restartPolicy: Always
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: inference
+  labels:
+    app: inference
+spec:
+  type: ClusterIP
+  selector:
+    app: inference
+  ports:
+  - name: http
+    port: 8000
+    targetPort: 8000
+    protocol: TCP
+  - name: metrics
+    port: 8000
+    targetPort: 8000
+    protocol: TCP
+
+---
+# PodDisruptionBudget to ensure availability during updates
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: inference-pdb
+spec:
+  minAvailable: 2  # Always keep at least 2 pods running
+  selector:
+    matchLabels:
+      app: inference

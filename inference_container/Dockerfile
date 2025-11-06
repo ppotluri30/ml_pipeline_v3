@@ -42,8 +42,10 @@ EXPOSE 8000
 ENV UVICORN_WORKERS=1 \
     UVICORN_TIMEOUT_KEEP_ALIVE=60 \
     UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN=30 \
-    UVICORN_LIMIT_CONCURRENCY=1000
+    UVICORN_LIMIT_CONCURRENCY=1000 \
+    INFERENCE_START_IN_APP=1
 
-# Lightweight process supervisor: run Kafka loop (main.py) and API (uvicorn) together.
-# All key Uvicorn options are configurable via env; keep defaults conservative and compatible.
-CMD ["sh", "-lc", "python main.py & exec uvicorn api_server:app --host 0.0.0.0 --port 8000 --log-level info --access-log --workers ${UVICORN_WORKERS:-1} --limit-concurrency ${UVICORN_LIMIT_CONCURRENCY:-1000} --timeout-keep-alive ${UVICORN_TIMEOUT_KEEP_ALIVE:-${UVICORN_KEEPALIVE:-60}} --timeout-graceful-shutdown ${UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN:-30}"]
+# UNIFIED SINGLE-PROCESS ARCHITECTURE:
+# Run only uvicorn; Kafka consumer starts within FastAPI via INFERENCE_START_IN_APP=1
+# This ensures main.py runtime and api_server.py share the same memory space and service.df
+CMD ["sh", "-c", "exec uvicorn api_server:app --host 0.0.0.0 --port 8000 --log-level info --access-log --workers ${UVICORN_WORKERS:-1} --limit-concurrency ${UVICORN_LIMIT_CONCURRENCY:-1000} --timeout-keep-alive ${UVICORN_TIMEOUT_KEEP_ALIVE:-60} --timeout-graceful-shutdown ${UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN:-30}"]

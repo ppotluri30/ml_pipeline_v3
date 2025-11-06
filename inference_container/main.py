@@ -18,6 +18,7 @@ import queue
 import threading
 import time
 import traceback
+import pandas as pd
 import pyarrow.parquet as pq
 import json as _json
 import re
@@ -404,21 +405,63 @@ def message_handler(service: Inferencer, message_queue: queue.Queue):
                         try:
                             parquet_bytes = get_file(service.gateway_url, bucket, object_key)
                             table = pq.read_table(source=parquet_bytes)
-                            service.df = table.to_pandas()
-                            service.df, tz_meta = strip_timezones(service.df)
+                            
+                            # ===== FIX: Load into local variable, not service.df (Option 3) =====
+                            kafka_df = table.to_pandas()
+                            
+                            # ===== FIX: Normalize DatetimeIndex to "time" column (Option 2) =====
+                            if isinstance(kafka_df.index, pd.DatetimeIndex):
+                                # Convert index to "time" column for consistency with HTTP API
+                                kafka_df = kafka_df.reset_index()
+                                if 'index' in kafka_df.columns:
+                                    kafka_df.rename(columns={'index': 'time'}, inplace=True)
+                                print({
+                                    "service": "inference",
+                                    "event": "kafka_consumer_index_normalized",
+                                    "object_key": object_key,
+                                    "column_added": "time",
+                                    "row_count": len(kafka_df),
+                                    "timestamp_range": f"{kafka_df['time'].min()} to {kafka_df['time'].max()}" if 'time' in kafka_df.columns else "N/A"
+                                })
+                            
+                            # Strip timezones from the normalized DataFrame
+                            kafka_df, tz_meta = strip_timezones(kafka_df)
                             if tz_meta.get("index") or tz_meta.get("columns"):
                                 print({
                                     "service": "inference",
-                                    "event": "preprocess_dataframe_tz_normalized",
+                                    "event": "kafka_dataframe_tz_normalized",
                                     "object_key": object_key,
                                     "index_adjusted": bool(tz_meta.get("index")),
                                     "columns_adjusted": tz_meta.get("columns", []),
                                 })
+                            
+                            # Log DataFrame structure for debugging
+                            print({
+                                "service": "inference",
+                                "event": "kafka_consumer_dataframe_loaded",
+                                "object_key": object_key,
+                                "columns": list(kafka_df.columns),
+                                "shape": list(kafka_df.shape),
+                                "has_time_column": 'time' in kafka_df.columns,
+                                "unique_timestamps": len(kafka_df['time'].unique()) if 'time' in kafka_df.columns else 0
+                            })
 
+                            # ===== Convert "time" column back to index for perform_inference =====
+                            if 'time' in kafka_df.columns:
+                                kafka_df.set_index('time', inplace=True)
+                                print({
+                                    "service": "inference",
+                                    "event": "kafka_consumer_index_prepared",
+                                    "object_key": object_key,
+                                    "index_type": str(type(kafka_df.index)),
+                                    "index_unique": kafka_df.index.nunique()
+                                })
+
+                            # ===== Perform inference on local kafka_df, NOT service.df =====
                             if service.current_model is not None:
-                                service.perform_inference(service.df)
+                                service.perform_inference(kafka_df)
                             else:
-                                print("Model not yet loaded; stored dataframe for later inference.")
+                                print("Model not yet loaded; Kafka data processed but inference skipped.")
                         except Exception as e:
                             print(f"Inference worker error fetching, parsing, or during inference for {object_key}: {e}")
                             traceback.print_exc()
@@ -572,8 +615,29 @@ def _preload_test_dataframe(service: Inferencer):
         test_key = os.environ.get("TEST_OBJECT_KEY", "test_processed_data.parquet")
         parquet_bytes = get_file(service.gateway_url, test_bucket, test_key)
         table = pq.read_table(source=parquet_bytes)
-        service.df = table.to_pandas()
+        
+        # ===== FIX: Normalize DatetimeIndex to "time" column (Option 2) =====
+        df = table.to_pandas()
+        if isinstance(df.index, pd.DatetimeIndex):
+            df = df.reset_index()
+            if 'index' in df.columns:
+                df.rename(columns={'index': 'time'}, inplace=True)
+            print({
+                "service": "inference",
+                "event": "preload_index_normalized",
+                "column_added": "time",
+                "row_count": len(df),
+                "timestamp_range": f"{df['time'].min()} to {df['time'].max()}" if 'time' in df.columns else "N/A"
+            })
+        
+        # Convert "time" column back to index for downstream inference usage
+        if 'time' in df.columns:
+            df.set_index('time', inplace=True)
+            print({"service": "inference", "event": "preload_index_restored", "index_type": str(type(df.index)), "index_unique": df.index.nunique()})
+        
+        service.df = df
         print({"service": "inference", "event": "preload_test_success", "rows": int(len(service.df.index)), "cols": int(len(service.df.columns)), "object_key": test_key})
+        print(f"[DEBUG] Preload: First 5 index values: {service.df.index[:5].tolist()}, Unique: {service.df.index.nunique()}")
     except Exception as e:  # noqa: BLE001
         print({"service": "inference", "event": "preload_test_fail", "error": str(e)})
 

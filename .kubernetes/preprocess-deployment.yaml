@@ -31,6 +31,20 @@ spec:
               value: training-data
             - name: PRODUCER_TOPIC_1
               value: inference-data
+            - name: DATASET_NAME
+              value: PobleSec
+            - name: SAMPLE_TRAIN_ROWS
+              value: "50"
+            - name: SAMPLE_TEST_ROWS
+              value: "50"
+            - name: SAMPLE_STRATEGY
+              value: head
+            - name: SAMPLE_SEED
+              value: "42"
+            - name: FORCE_REPROCESS
+              value: "1"
+            - name: EXTRA_HASH_SALT
+              value: "ultra_clean_data_nov5_final"
           image: preprocess
           imagePullPolicy: IfNotPresent
           name: preprocess

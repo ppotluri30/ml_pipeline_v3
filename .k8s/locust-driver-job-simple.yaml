@@ -1,0 +1,57 @@
+---
+# Simplified Job using custom driver image
+# Build image first: docker build -t locust-driver:latest -f Dockerfile.driver .
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: locust-load-test-matrix
+  namespace: default
+  labels:
+    app: locust
+    component: driver
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 3600  # Keep job for 1 hour after completion
+  template:
+    metadata:
+      labels:
+        app: locust
+        component: driver
+    spec:
+      serviceAccountName: locust-driver
+      restartPolicy: OnFailure
+      
+      containers:
+      - name: driver
+        image: locust-driver:latest
+        imagePullPolicy: Never  # Use local image (Docker Desktop)
+        
+        env:
+        - name: LOCUST_MASTER_URL
+          value: "http://locust-master:8089"
+        - name: INFERENCE_DEPLOYMENT
+          value: "inference"
+        - name: WORKER_DEPLOYMENT
+          value: "locust-worker"
+        - name: NAMESPACE
+          value: "default"
+        - name: TEST_DURATION
+          value: "120"
+        - name: COOLDOWN
+          value: "15"
+        
+        volumeMounts:
+        - name: results
+          mountPath: /results
+        
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+      
+      volumes:
+      - name: results
+        emptyDir: {}

@@ -1,0 +1,107 @@
+---
+# KEDA ScaledObject for SLO-driven autoscaling
+# Requires: helm install keda kedacore/keda --namespace keda --create-namespace
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: inference-slo-scaler
+  namespace: default
+spec:
+  scaleTargetRef:
+    name: inference
+  
+  minReplicaCount: 3
+  maxReplicaCount: 20
+  
+  pollingInterval: 15  # Check metrics every 15s
+  cooldownPeriod: 300  # Wait 5 minutes before scaling down
+  
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleUp:
+          stabilizationWindowSeconds: 60
+          policies:
+          - type: Pods
+            value: 2
+            periodSeconds: 30
+          - type: Percent
+            value: 50
+            periodSeconds: 30
+          selectPolicy: Max
+        
+        scaleDown:
+          stabilizationWindowSeconds: 300
+          policies:
+          - type: Pods
+            value: 1
+            periodSeconds: 60
+          - type: Percent
+            value: 10
+            periodSeconds: 120
+          selectPolicy: Min
+  
+  # Triggers (OR semantics - scale if ANY trigger fires)
+  triggers:
+  
+  # Trigger 1: P95 Latency > 350ms
+  - type: prometheus
+    metadata:
+      serverAddress: http://prometheus-server.monitoring.svc.cluster.local:9090
+      metricName: http_request_duration_p95
+      query: |
+        histogram_quantile(0.95,
+          sum by (pod) (
+            rate(http_request_duration_seconds_bucket{endpoint="/predict",pod=~"inference-.*"}[1m])
+          )
+        )
+      threshold: "0.350"  # 350ms in seconds
+      activationThreshold: "0.200"  # Start scaling above 200ms
+  
+  # Trigger 2: In-flight requests > 10 per pod
+  - type: prometheus
+    metadata:
+      serverAddress: http://prometheus-server.monitoring.svc.cluster.local:9090
+      metricName: http_requests_in_flight_avg
+      query: |
+        avg by (pod) (
+          http_requests_in_flight{endpoint="/predict",pod=~"inference-.*"}
+        )
+      threshold: "10"
+      activationThreshold: "5"
+  
+  # Trigger 3: CPU > 80% (backstop)
+  - type: cpu
+    metadataSpec:
+      type: Utilization
+      value: "80"
+
+---
+# Alternative: Simple Prometheus-based KEDA scaler (single metric)
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: inference-latency-scaler
+  namespace: default
+spec:
+  scaleTargetRef:
+    name: inference
+  
+  minReplicaCount: 3
+  maxReplicaCount: 20
+  
+  pollingInterval: 15
+  cooldownPeriod: 300
+  
+  triggers:
+  - type: prometheus
+    metadata:
+      serverAddress: http://prometheus-server.monitoring.svc.cluster.local:9090
+      metricName: inference_p95_latency_ms
+      # P95 latency averaged across all pods
+      query: |
+        1000 * histogram_quantile(0.95,
+          sum(rate(http_request_duration_seconds_bucket{endpoint="/predict"}[1m])) by (le)
+        )
+      threshold: "350"  # 350ms
+      activationThreshold: "200"

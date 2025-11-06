@@ -1,0 +1,1 @@
+﻿Workers,Users,InitialReplicas,PeakReplicas,FinalReplicas,MinReplicas,MaxReplicas,AvgCPU%,ScalingEvents,ScaleUpEvents,ScaleDownEvents,RPS,Median_ms,P95_ms,P99_ms,AvgLatency_ms,Failures,Failures_Pct,TotalRequests,Duration_s

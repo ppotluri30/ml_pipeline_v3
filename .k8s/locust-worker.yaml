@@ -1,0 +1,52 @@
+---
+# Locust Worker Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: locust-worker
+  namespace: default
+  labels:
+    app: locust
+    role: worker
+spec:
+  replicas: 4  # Will be scaled dynamically by driver
+  selector:
+    matchLabels:
+      app: locust
+      role: worker
+  template:
+    metadata:
+      labels:
+        app: locust
+        role: worker
+    spec:
+      containers:
+      - name: locust
+        image: locustio/locust:latest
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: LOCUST_LOCUSTFILE
+          value: "/home/locust/locustfile.py"
+        - name: TARGET_HOST
+          value: "http://inference:8000"
+        command: ["locust"]
+        args:
+        - "--worker"
+        - "--master-host=locust-master"
+        - "--master-port=5557"
+        - "--host=http://inference:8000"
+        - "--loglevel=INFO"
+        volumeMounts:
+        - name: locust-scripts
+          mountPath: /home/locust
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+      volumes:
+      - name: locust-scripts
+        configMap:
+          name: locust-scripts

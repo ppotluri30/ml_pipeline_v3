@@ -1,0 +1,220 @@
+---
+# ServiceAccount for driver job
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: locust-driver
+  namespace: default
+
+---
+# Role with permissions to scale deployments
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: locust-driver-role
+  namespace: default
+rules:
+- apiGroups: ["apps"]
+  resources: ["deployments", "deployments/scale"]
+  verbs: ["get", "list", "patch", "update"]
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list"]
+
+---
+# RoleBinding to attach role to service account
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: locust-driver-rolebinding
+  namespace: default
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: locust-driver-role
+subjects:
+- kind: ServiceAccount
+  name: locust-driver
+  namespace: default
+
+---
+# ConfigMap with driver script
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: locust-driver-script
+  namespace: default
+data:
+  locust-driver.py: |
+    # The driver script content will be mounted here
+    # In practice, you'd embed the full script or use a custom image
+    # For now, this is a placeholder - see instructions below
+
+---
+# Job to execute load test matrix
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: locust-load-test-matrix
+  namespace: default
+  labels:
+    app: locust
+    component: driver
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 3600  # Keep job for 1 hour after completion
+  template:
+    metadata:
+      labels:
+        app: locust
+        component: driver
+    spec:
+      serviceAccountName: locust-driver
+      restartPolicy: OnFailure
+      
+      # Init container to copy driver script (alternative: use custom image)
+      initContainers:
+      - name: setup-driver
+        image: python:3.11-slim
+        command:
+        - /bin/sh
+        - -c
+        - |
+          echo "Installing dependencies..."
+          pip install --no-cache-dir requests
+          echo "✅ Dependencies installed"
+        volumeMounts:
+        - name: pip-cache
+          mountPath: /root/.cache/pip
+      
+      containers:
+      - name: driver
+        image: python:3.11-slim
+        command:
+        - /bin/sh
+        - -c
+        - |
+          # Install dependencies
+          pip install --no-cache-dir requests
+          
+          # Install kubectl
+          curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+          chmod +x kubectl
+          mv kubectl /usr/local/bin/
+          
+          # Run driver script
+          python3 /driver/locust-driver.py
+        
+        env:
+        - name: LOCUST_MASTER_URL
+          value: "http://locust-master:8089"
+        - name: INFERENCE_DEPLOYMENT
+          value: "inference"
+        - name: WORKER_DEPLOYMENT
+          value: "locust-worker"
+        - name: NAMESPACE
+          value: "default"
+        - name: TEST_DURATION
+          value: "120"
+        - name: COOLDOWN
+          value: "15"
+        
+        volumeMounts:
+        - name: driver-script
+          mountPath: /driver
+        - name: results
+          mountPath: /results
+        - name: pip-cache
+          mountPath: /root/.cache/pip
+        
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+      
+      volumes:
+      - name: driver-script
+        configMap:
+          name: locust-driver-script
+          defaultMode: 0755
+      - name: results
+        emptyDir: {}
+      - name: pip-cache
+        emptyDir: {}
+
+---
+# Alternative: Job using host kubectl (requires hostPath and privileged access)
+# This is simpler but less portable
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: locust-load-test-matrix-simple
+  namespace: default
+  labels:
+    app: locust
+    component: driver
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app: locust
+        component: driver
+    spec:
+      serviceAccountName: locust-driver
+      restartPolicy: OnFailure
+      
+      containers:
+      - name: driver
+        image: bitnami/kubectl:latest
+        command:
+        - /bin/bash
+        - -c
+        - |
+          # Install Python and pip
+          apt-get update && apt-get install -y python3 python3-pip curl
+          pip3 install requests
+          
+          # Copy driver script
+          cp /driver-source/locust-driver.py /tmp/driver.py
+          
+          # Execute driver
+          cd /results
+          python3 /tmp/driver.py
+          
+          # Show results
+          echo "========================================"
+          echo "Test Results:"
+          cat auto_summary.md
+        
+        env:
+        - name: LOCUST_MASTER_URL
+          value: "http://locust-master:8089"
+        
+        volumeMounts:
+        - name: driver-source
+          mountPath: /driver-source
+        - name: results
+          mountPath: /results
+        
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+      
+      volumes:
+      - name: driver-source
+        hostPath:
+          path: /path/to/your/flts-main/.k8s  # Update this path
+          type: Directory
+      - name: results
+        hostPath:
+          path: /tmp/locust-results
+          type: DirectoryOrCreate

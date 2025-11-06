@@ -1,0 +1,18 @@
+{
+  "model_uri": "s3://mlflow/0/983859e24128462fa98846c899f4e0b7/artifacts/LSTM",
+  "run_id": "983859e24128462fa98846c899f4e0b7",
+  "experiment_name": "Default",
+  "experiment_id": "0",
+  "model_type": "LSTM",
+  "config_hash": "6ce79cfae0029f0499e5ca7a14f996ee0fe8c7d4f2a4bbf2fe78d3ae6b155ea9",
+  "score": 0.6717,
+  "metrics": {
+    "final_loss": 0.0011,
+    "rmse": 0.0325,
+    "mae": 0.0160,
+    "r2": 0.6717
+  },
+  "timestamp": "2025-11-04T23:02:30Z",
+  "promoted_by": "manual_promotion",
+  "model_class": "pytorch"
+}

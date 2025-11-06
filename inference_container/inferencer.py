@@ -1,5 +1,5 @@
 from client_utils import post_file
-from data_utils import window_data, check_uniform, time_to_feature, subset_scaler
+from data_utils import window_data, check_uniform, time_to_feature, subset_scaler, _fix_zero_scale
 from kafka_utils import produce_message, publish_error
 import numpy as np
 import pandas as pd
@@ -203,6 +203,10 @@ class Inferencer:
                             scaler_path = download_artifacts(artifact_uri=scaler_artifact_uri, dst_path=tempfile.gettempdir())
                             with open(scaler_path, "rb") as f:
                                 self.current_scaler = pickle.load(f)
+                            # Apply zero-scale fix to prevent division-by-zero during inverse_transform
+                            if self.current_scaler is not None:
+                                scaler_type_name = self.current_scaler.__class__.__name__
+                                self.current_scaler = _fix_zero_scale(self.current_scaler, scaler_type_name=scaler_type_name)
                             if self.current_scaler is not None:
                                 scaler_loaded = True
                                 print({
@@ -317,7 +321,8 @@ class Inferencer:
             if self.df is None:
                 print("No data provided for inference and service dataframe is empty.")
                 return None
-            df_eval = self.df
+            # CRITICAL: Deep copy shared DataFrame to prevent concurrent modification
+            df_eval = self.df.copy(deep=True)
         else:
             if os.getenv("INFER_VERBOSE_DATA", "0") in {"1","true","TRUE"}:
                 try:
@@ -378,6 +383,11 @@ class Inferencer:
             timings["precheck_ms"] = (time.perf_counter() - overall_start) * 1000.0
 
             stage_start = time.perf_counter()
+            # Diagnostic: Log first few timestamps to debug zero timedelta
+            if len(df_eval.index) > 0:
+                print(f"[DEBUG] req_id={timings.get('req_id', 'unknown')}: df_eval has {len(df_eval)} rows")
+                print(f"[DEBUG] First 5 timestamps: {df_eval.index[:5].tolist()}")
+                print(f"[DEBUG] Unique timestamps: {df_eval.index.nunique()}")
             timedelta = check_uniform(df_eval)
             timings["check_uniform_ms"] = (time.perf_counter() - stage_start) * 1000.0
 
