@@ -1,0 +1,69 @@
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: inference-slo-scaler
+  namespace: default
+  labels:
+    app: inference
+    component: ml-inference
+spec:
+  scaleTargetRef:
+    name: inference
+  minReplicaCount: 3  # Changed from 2 to maintain minimum capacity
+  maxReplicaCount: 20  # Changed from 12 for high-traffic scenarios
+  pollingInterval: 15  # Check metrics every 15 seconds
+  cooldownPeriod: 300  # Wait 5 minutes before scaling down (was 180)
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleUp:
+          stabilizationWindowSeconds: 60  # Changed from 0 - prevent thrashing
+          policies:
+          - type: Pods
+            value: 2  # Add 2 pods per cycle (was 3)
+            periodSeconds: 30  # Every 30 seconds (was 15)
+          - type: Percent
+            value: 50  # Or 50% of current (was 100%)
+            periodSeconds: 30
+          selectPolicy: Max
+        scaleDown:
+          stabilizationWindowSeconds: 300  # Keep 5 minutes (was 180)
+          policies:
+          - type: Pods
+            value: 1  # Remove 1 pod per cycle
+            periodSeconds: 60  # Every 60 seconds (was 120)
+          - type: Percent
+            value: 10  # Or 10% of current (was 25%)
+            periodSeconds: 120
+          selectPolicy: Min
+  triggers:
+  # Primary driver: p95 latency > 500ms (production SLO)
+  - type: prometheus
+    metadata:
+      serverAddress: http://prometheus-server.default.svc.cluster.local:80
+      metricName: inference_latency_p95
+      query: |
+        histogram_quantile(0.95, 
+          sum(rate(inference_latency_seconds_bucket[1m])) by (le)
+        )
+      threshold: "0.500"  # Scale if p95 > 500ms
+      activationThreshold: "0.300"  # Activate if p95 > 300ms
+  # Secondary driver: queue length > 20 jobs
+  - type: prometheus
+    metadata:
+      serverAddress: http://prometheus-server.default.svc.cluster.local:80
+      metricName: inference_queue_length_avg
+      query: |
+        avg(inference_queue_len)
+      threshold: "20"
+      activationThreshold: "10"
+  # Guardrail: CPU > 85% (prevent saturation)
+  - type: cpu
+    metricType: Utilization
+    metadata:
+      value: "85"
+  # Guardrail: Memory > 80% (prevent OOM)
+  - type: memory
+    metricType: Utilization
+    metadata:
+      value: "80"

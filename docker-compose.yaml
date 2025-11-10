@@ -398,6 +398,8 @@ services:
       - QUEUE_WORKERS=6
       - QUEUE_MAXSIZE=10
       - INFERENCE_TIMEOUT=60
+      # Diagnostic tracing
+      - DEBUG_PANDAS_TRACE=1
       - INFERENCE_START_IN_APP=1
       - SIMULATE_DELAY_SECS=0 # Default off; override locally only when testing artificial latency
       # Kafka backpressure and commit controls (bounded queue inside runtime)

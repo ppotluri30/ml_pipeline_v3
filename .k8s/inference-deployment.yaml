@@ -20,7 +20,7 @@ spec:
           command: ['sh', '-c', 'echo Waiting for Kafka...; while ! nc -z kafka 9092; do sleep 1; done; echo Kafka is up!']
       containers:
         - name: inference
-          image: inference:latest
+          image: inference:trace
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8000
@@ -47,6 +47,8 @@ spec:
               value: http://mlflow:5000
             - name: PRODUCER_TOPIC
               value: performance-eval
+            - name: DEBUG_PANDAS_TRACE
+              value: "1"
           resources:
             requests:
               cpu: "1"

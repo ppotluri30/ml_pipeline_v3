@@ -8,61 +8,108 @@ metadata:
 data:
   locustfile.py: |
     """
-    Kubernetes-optimized Locust load test for FLTS inference service
+    Locust load test for FLTS inference service that generates realistic
+    synthetic payloads with unique timestamps on every request.
     """
-    from locust import HttpUser, task, between
+    import datetime as dt
     import json
     import os
-    
-    class InferenceUser(HttpUser):
-        wait_time = between(0.5, 2.0)
-        
-        # Minimal valid payload for inference
-        predict_payload = {
-            "data": {
-                "ts": ["2018-02-06 00:00:00"] * 30,
-                "down": [109934672.0] * 30,
-                "up": [41703548.0] * 30,
-                "rnti_count": [96.0] * 30,
-                "mcs_down": [18.52] * 30,
-                "mcs_down_var": [15.31] * 30,
-                "mcs_up": [15.93] * 30,
-                "mcs_up_var": [22.03] * 30,
-                "rb_down": [37.61] * 30,
-                "rb_down_var": [19.99] * 30,
-                "rb_up": [9.08] * 30,
-                "rb_up_var": [8.99] * 30
-            }
+
+    from locust import HttpUser, task, between
+
+    ROWS = int(os.getenv("LOCUST_PAYLOAD_ROWS", "30"))
+    STEP_MINUTES = max(1, int(os.getenv("LOCUST_TS_STEP_MINUTES", "1")))
+    PREDICT_WAIT_MIN = float(os.getenv("PREDICT_USER_WAIT_MIN", "1"))
+    PREDICT_WAIT_MAX = max(PREDICT_WAIT_MIN, float(os.getenv("PREDICT_USER_WAIT_MAX", "2")))
+    DEBUG_PAYLOAD = os.getenv("DEBUG_LOCUST_PAYLOAD", "0") in {"1", "true", "TRUE"}
+    LOG_PAYLOAD = os.getenv("LOG_PREDICT_PAYLOAD", "0") in {"1", "true", "TRUE"}
+    OUTPUT_LEN = max(1, int(os.getenv("PREDICT_OUTPUT_LEN", "1")))
+
+    _PAYLOAD_SEQ = 0
+
+
+    def _build_predict_payload() -> tuple[int, dict]:
+        """Construct a synthetic prediction payload with unique timestamps."""
+        global _PAYLOAD_SEQ
+        seq = _PAYLOAD_SEQ
+        _PAYLOAD_SEQ += 1
+
+        base_start = dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
+        base_time = base_start + dt.timedelta(minutes=seq * STEP_MINUTES)
+        ts_values = [
+            (base_time + dt.timedelta(minutes=i * STEP_MINUTES)).strftime("%Y-%m-%dT%H:%M:%S")
+            for i in range(ROWS)
+        ]
+
+        base_seq = [float(i % 50) for i in range(ROWS)]
+        data = {
+            "ts": ts_values,
+            "down": [v * 1_000_000.0 + 5_000_000.0 for v in base_seq],
+            "up": [v * 1000.0 + 1000.0 for v in base_seq],
+            "rnti_count": [2000.0 + v for v in base_seq],
+            "mcs_down": [10.0 + (v % 5) for v in base_seq],
+            "mcs_down_var": [50.0 + (v * 0.5) for v in base_seq],
+            "mcs_up": [12.0 + (v % 4) for v in base_seq],
+            "mcs_up_var": [40.0 + (v * 0.4) for v in base_seq],
+            "rb_down": [0.05 + (v * 0.001) for v in base_seq],
+            "rb_down_var": [1e-7 + (v * 1e-9) for v in base_seq],
+            "rb_up": [0.01 + (v * 0.0005) for v in base_seq],
+            "rb_up_var": [5e-8 + (v * 1e-9) for v in base_seq],
         }
-        
-        @task(8)
+
+        payload = {"index_col": "ts", "inference_length": OUTPUT_LEN, "data": data}
+
+        if DEBUG_PAYLOAD:
+            unique_count = len(set(ts_values))
+            sample = ts_values[:5]
+            print(
+                f"[LOCUST_PAYLOAD] seq={seq} rows={ROWS} unique={unique_count} sample={sample}"
+            )
+            if unique_count != len(ts_values):
+                raise ValueError(f"Non-unique timestamps detected: seq={seq}")
+
+        return seq, payload
+
+
+    class InferenceUser(HttpUser):
+        wait_time = between(PREDICT_WAIT_MIN, PREDICT_WAIT_MAX)
+
+        @task
         def predict(self):
-            """Main prediction task - 80% weight"""
+            seq, payload = _build_predict_payload()
             with self.client.post(
                 "/predict",
-                json=self.predict_payload,
+                json=payload,
+                name="/predict",
                 catch_response=True,
-                name="/predict"
             ) as response:
-                if response.status_code == 200:
+                status_code = getattr(response, "status_code", None)
+
+                if LOG_PAYLOAD and response is not None:
+                    context = getattr(response, "context", None)
+                    if context is None:
+                        try:
+                            response.context = {}
+                            context = response.context
+                        except Exception:
+                            context = None
+                    if context is not None:
+                        context["request_json"] = payload
+
+                if status_code == 200:
                     response.success()
                 else:
-                    response.failure(f"Got status {response.status_code}")
-        
-        @task(1)
-        def health_check(self):
-            """Health check - 10% weight"""
-            with self.client.get("/healthz", catch_response=True, name="/healthz") as response:
-                if response.status_code == 200:
-                    response.success()
-                else:
-                    response.failure(f"Got status {response.status_code}")
-        
-        @task(1)
-        def metrics_check(self):
-            """Metrics endpoint - 10% weight"""
-            with self.client.get("/metrics", catch_response=True, name="/metrics") as response:
-                if response.status_code == 200:
-                    response.success()
-                else:
-                    response.failure(f"Got status {response.status_code}")
+                    sample = payload["data"]["ts"][:3]
+                    response.failure(f"Unexpected status {status_code} sample_ts={sample}")
+
+                if DEBUG_PAYLOAD:
+                    print(f"[LOCUST_RESPONSE] seq={seq} status={status_code}")
+
+
+    __all__ = ["InferenceUser"]
+
+
+    if __name__ == "__main__":
+        from locust import run_single_user
+
+        run_single_user(InferenceUser)

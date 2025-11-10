@@ -85,11 +85,7 @@ def callback(message):
 FAILURE_MAX_RETRIES = int(os.environ.get("FAILURE_MAX_RETRIES", "3"))
 _failure_counts: Dict[str, int] = {}
 _last_run_context: Dict[str, Any] = {}
-# Duplicate / loop suppression controls
-SKIP_DUPLICATE_CONFIGS = os.environ.get("SKIP_DUPLICATE_CONFIGS", "1").lower() in {"1", "true", "yes"}
-# Tracks (MODEL_TYPE, config_hash) already successfully trained this process lifetime
-_processed_config_models: Set[Tuple[str, str]] = set()
-MAX_PROCESSED_CACHE = int(os.environ.get("DUP_CACHE_MAX", "500"))
+# DUPLICATE DETECTION DISABLED - removed all caching logic
 
 
 def _extract_meta(schema):
@@ -348,13 +344,12 @@ def _train_parquet(df: pd.DataFrame, meta: Dict[str, Any]):
                 "status": "SUCCESS",
                 "experiment": experiment_name,
                 "run_name": MODEL_TYPE,
-                "config_hash": CONFIG_HASH,
                 "run_id": run_id,
             }
             produce_message(producer, os.environ.get("PRODUCER_TOPIC") or "model-training", success_payload, key=f"trained-{MODEL_TYPE}")
             _jlog("train_success_publish", run_id=run_id, model_type=MODEL_TYPE, config_hash=CONFIG_HASH)
         except Exception as pe:  # noqa: BLE001
-            publish_error(producer, f"DLQ-{os.environ.get('PRODUCER_TOPIC','model-training')}", "Publish training success", "Failure", str(pe), {"model_type": MODEL_TYPE, "config_hash": CONFIG_HASH, "run_id": run_id})
+            publish_error(producer, f"DLQ-{os.environ.get('PRODUCER_TOPIC','model-training')}", "Publish training success", "Failure", str(pe), {"model_type": MODEL_TYPE, "run_id": run_id})
             _jlog("train_success_publish_fail", error=str(pe), run_id=run_id, model_type=MODEL_TYPE)
 
         # Loss curve
@@ -416,30 +411,16 @@ def message_handler():
                 message_queue.task_done()
                 continue
 
-            # Duplicate suppression: skip if this MODEL_TYPE+config_hash already processed
+            # DUPLICATE DETECTION DISABLED: Always train, no caching
             model_type = os.environ.get("MODEL_TYPE", "UNKNOWN")
-            cfg_hash = meta.get('config_hash') or os.environ.get("DEFAULT_CONFIG_HASH") or "default_cfg"
-            signature = (model_type, cfg_hash)
-            if SKIP_DUPLICATE_CONFIGS and signature in _processed_config_models:
-                _jlog("train_skip_duplicate", model_type=model_type, config_hash=cfg_hash, object_key=object_key)
-                _commit(consumer, msg)
-                message_queue.task_done()
-                continue
-
+            
             failures_key = object_key
             if failures_key not in _failure_counts:
                 _failure_counts[failures_key] = 0
 
             try:
                 _train_parquet(df, meta)
-                _jlog("train_complete", object_key=object_key, config_hash=meta.get('config_hash'))
-                # Mark as processed (after success path)
-                if SKIP_DUPLICATE_CONFIGS and signature not in _processed_config_models:
-                    _processed_config_models.add(signature)
-                    # Simple size cap eviction (FIFO order not strictly kept but adequate)
-                    if len(_processed_config_models) > MAX_PROCESSED_CACHE:
-                        # Pop an arbitrary element to keep memory bounded
-                        _processed_config_models.pop()
+                _jlog("train_complete", object_key=object_key)
                 _commit(consumer, msg)
             except Exception as e:  # noqa: BLE001
                 _failure_counts[failures_key] += 1

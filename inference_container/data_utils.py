@@ -5,6 +5,7 @@ import os
 from typing import Optional, Any, List, Dict
 from sklearn.impute import KNNImputer # type: ignore
 from sklearn.preprocessing import MinMaxScaler, StandardScaler, RobustScaler, MaxAbsScaler # type: ignore
+from trace_utils import trace_df_operation, trace_dataframe, trace_operation, trace_error, TRACE_ENABLED
 
 # ===== DIAGNOSTIC TRACING =====
 DEBUG_PAYLOAD_TRACE = os.getenv("DEBUG_PAYLOAD_TRACE", "0") in {"1", "true", "TRUE"}
@@ -255,29 +256,44 @@ def generate_lags(df: pd.DataFrame, n_lags: int, step: int=1) -> pd.DataFrame:
 
     return df_return
 
+@trace_df_operation
 def check_uniform(df: pd.DataFrame) -> pd.Timedelta:
     '''
     Assuming a dataframe with a datetime index, this function checks for uniformity
     in sampling and returns the most common Timedelta
     '''
+    trace_dataframe("check_uniform_entry", df, {}, "check_uniform")
 
     # Ensure the index is a DatetimeIndex for reliable Timedelta operations
     if not isinstance(df.index, pd.DatetimeIndex):
+        trace_error("check_uniform", TypeError("Index not DatetimeIndex"), index_type=str(type(df.index)))
         raise TypeError("DataFrame index must be a DatetimeIndex.")
     
     time_diffs: pd.Series = df.index.to_series().diff()
+    trace_operation("time_diffs_calculated", func="check_uniform", 
+                   diffs_count=len(time_diffs), non_null_count=int(time_diffs.notna().sum()))
+    
     time_diffs_mode = time_diffs.mode()
 
     if not time_diffs_mode.empty:
         # Explicitly extract the first element and cast it to pd.Timedelta.
         most_common_frequency = pd.Timedelta(time_diffs_mode.iloc[0])
+        trace_operation("frequency_detected", func="check_uniform",
+                       frequency_str=str(most_common_frequency), 
+                       frequency_seconds=float(most_common_frequency.total_seconds()))
     else:
         # If there's less than 2 data points, diff() will be all NaT or empty,
         # leading to an empty mode.
+        trace_error("check_uniform", ValueError("Cannot determine frequency"), 
+                   time_diffs_len=len(time_diffs), mode_empty=True)
         raise ValueError('Cannot determine most common frequency, not enough valid time differences.')
 
     # Safeguard against zero frequency (would cause division by zero in pd.date_range)
     if most_common_frequency == pd.Timedelta(0) or most_common_frequency.total_seconds() == 0:
+        trace_error("check_uniform", ValueError("Zero frequency detected"),
+                   frequency=str(most_common_frequency), 
+                   index_sample=[str(ts) for ts in df.index[:10].tolist()],
+                   unique_timestamps=int(df.index.nunique()))
         raise ValueError('Time frequency is zero - all timestamps are identical. Cannot generate date range.')
 
     tolerance = pd.Timedelta(milliseconds=10)
@@ -286,6 +302,7 @@ def check_uniform(df: pd.DataFrame) -> pd.Timedelta:
     diff_counts = time_diffs.value_counts().sort_index()
 
     if diff_counts.empty:
+        trace_error("check_uniform", ValueError("No valid diffs"), diff_counts_empty=True)
         raise ValueError('No valid time differences found to calculate frequency.')
 
     total_observations = len(time_diffs)
@@ -295,12 +312,17 @@ def check_uniform(df: pd.DataFrame) -> pd.Timedelta:
     if percentage_most_common < 75:
         print(f"Most common frequency accounts for {percentage_most_common:.2f}% of the time steps.")
         print('Warning: sampling frequency is highly irregular. Resampling is strongly recommended')
+        trace_operation("irregular_frequency_warning", func="check_uniform",
+                       percentage=float(percentage_most_common), threshold=75)
     elif percentage_most_common < 98:
         print(f"Most common frequency accounts for {percentage_most_common:.2f}% of the time steps.")
         print('Warning: sampling frequency is irregular. Resampling is recommended')
+        trace_operation("irregular_frequency_info", func="check_uniform",
+                       percentage=float(percentage_most_common), threshold=98)
 
     return most_common_frequency
 
+@trace_df_operation
 def time_to_feature(df: pd.DataFrame):
     '''
     Creates features for cyclical representations of time to help ML models identify seasonality.
@@ -312,9 +334,13 @@ def time_to_feature(df: pd.DataFrame):
         sample_before = list(df.index[:3])
         _trace_data_utils("TIME_TO_FEATURE_BEFORE", f"unique={unique_before} rows={len(df)} sample={sample_before}")
     
+    trace_dataframe("time_to_feature_entry", df, {}, "time_to_feature")
+    
     df_return = df.copy()
+    trace_operation("after_copy", func="time_to_feature", shape=list(df_return.shape))
 
     if not isinstance(df.index, pd.DatetimeIndex):
+        trace_error("time_to_feature", TypeError("Index not DatetimeIndex"), index_type=str(type(df.index)))
         raise TypeError("DataFrame index must be a DatetimeIndex.")
     
     # ===== TRACE: After copy =====
@@ -328,6 +354,8 @@ def time_to_feature(df: pd.DataFrame):
         .assign(day_of_week=df.index.dayofweek)
         .assign(day_of_year=df.index.dayofyear)
     )
+    
+    trace_operation("after_assign", func="time_to_feature", shape=list(df_return.shape), columns=list(df_return.columns))
 
     # ===== TRACE: After assign =====
     if DEBUG_PAYLOAD_TRACE:
@@ -346,6 +374,8 @@ def time_to_feature(df: pd.DataFrame):
         unique_final = df_return.index.nunique()
         sample_final = list(df_return.index[:3])
         _trace_data_utils("TIME_TO_FEATURE_FINAL", f"unique={unique_final} rows={len(df_return)} cols={len(df_return.columns)} sample={sample_final}")
+    
+    trace_dataframe("time_to_feature_exit", df_return, {}, "time_to_feature")
 
     return df_return
 

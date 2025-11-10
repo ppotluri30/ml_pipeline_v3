@@ -272,7 +272,7 @@ def run_preprocess() -> None:
     sample_seed = int(os.environ.get("SAMPLE_SEED", "42") or 42)
 
     active_cfg = build_active_config()
-    # Embed data & sampling parameters into config for hashing/idempotency lineage
+    # Embed data & sampling parameters into config for lineage only (no hashing)
     active_cfg["_data"] = {
         "train_file": train_file,
         "test_file": test_file,
@@ -280,7 +280,7 @@ def run_preprocess() -> None:
         "sample_test_rows": sample_test_rows,
         "sample_strategy": sample_strategy,
     }
-    canonical, config_hash = canonical_config_blob(active_cfg)
+    canonical, config_hash = canonical_config_blob(active_cfg)  # Generate hash for lifecycle tracking
     train_obj = f"{out_train_base}.parquet"
     test_obj = f"{out_test_base}.parquet"
     train_meta_obj = f"{out_train_base}.meta.json"
@@ -292,31 +292,11 @@ def run_preprocess() -> None:
     except Exception as e:  # noqa: BLE001
         _log("producer_init_fail", error=str(e))
 
-    # Idempotency check (train_meta sufficient)
-    force_reprocess = os.environ.get("FORCE_REPROCESS", "0").lower() in {"1","true","yes"}
-    existing_meta = _read_meta_if_exists(gateway, out_bucket, train_meta_obj)
-    if not force_reprocess and existing_meta and existing_meta.get("config_hash") == config_hash:
-        # Re-emit claim checks, skip processing
-        _log("skip_idempotent", identifier=identifier, config_hash=config_hash, object_key=train_obj, result="cached")
-        if producer:
-            produce_message(
-                producer,
-                topic_train,
-                {"bucket": out_bucket, "object": train_obj, "size": existing_meta.get("row_count", 0), "v": 1, "config_hash": config_hash, "identifier": identifier},
-                key="train-claim",
-            )
-            produce_message(
-                producer,
-                topic_infer,
-                {"bucket": out_bucket, "object": test_obj, "object_key": test_obj, "size": existing_meta.get("row_count", 0), "operation": "post: test data", "v": 1, "config_hash": config_hash, "identifier": identifier},
-                key="inference-claim",
-            )
-        return
-    if force_reprocess:
-        _log("force_reprocess", identifier=identifier, reason="FORCE_REPROCESS flag set", prev_config_hash=existing_meta.get("config_hash") if existing_meta else None)
+    # LIFECYCLE TRACKING: Use config_hash to group pipeline runs
+    _log("process_start", identifier=identifier, config_hash=config_hash, train_file=train_file, test_file=test_file)
 
     try:
-        _log("download_start", identifier=identifier, config_hash=config_hash, train_file=train_file, test_file=test_file)
+        _log("download_start", identifier=identifier, train_file=train_file, test_file=test_file)
         df_train = read_data(_get_with_retry(gateway, input_bucket, train_file))
         df_test = read_data(_get_with_retry(gateway, input_bucket, test_file))
         orig_train_rows, orig_test_rows = len(df_train), len(df_test)
@@ -338,27 +318,26 @@ def run_preprocess() -> None:
             _log(
                 "sampling_applied",
                 identifier=identifier,
-                config_hash=config_hash,
                 train_rows_before=orig_train_rows,
                 test_rows_before=orig_test_rows,
                 train_rows_after=len(df_train),
                 test_rows_after=len(df_test),
                 strategy=sample_strategy,
             )
-        _log("download_done", identifier=identifier, config_hash=config_hash, train_rows=len(df_train), test_rows=len(df_test))
+        _log("download_done", identifier=identifier, train_rows=len(df_train), test_rows=len(df_test))
 
         proc_train, proc_test = apply_pipeline(df_train, df_test, active_cfg)
-        _log("pipeline_done", identifier=identifier, config_hash=config_hash, train_shape=list(proc_train.shape), test_shape=list(proc_test.shape))
+        _log("pipeline_done", identifier=identifier, train_shape=list(proc_train.shape), test_shape=list(proc_test.shape))
 
-        # Parquet metadata embed
+        # Parquet metadata embed (config and hash for lifecycle tracking)
         meta_embed = {"preprocess_config": canonical, "config_hash": config_hash}
         train_bytes = to_parquet_bytes(proc_train, meta_embed)
         test_bytes = to_parquet_bytes(proc_test, meta_embed)
 
-        _log("upload_start", identifier=identifier, config_hash=config_hash, object_key=train_obj)
+        _log("upload_start", identifier=identifier, object_key=train_obj)
         _post_with_retry(gateway, out_bucket, train_obj, train_bytes)
         _post_with_retry(gateway, out_bucket, test_obj, test_bytes)
-        _log("upload_done", identifier=identifier, config_hash=config_hash, object_key=train_obj, size_train=len(train_bytes), size_test=len(test_bytes))
+        _log("upload_done", identifier=identifier, object_key=train_obj, size_train=len(train_bytes), size_test=len(test_bytes))
 
         created_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         meta_common = {
@@ -390,21 +369,21 @@ def run_preprocess() -> None:
             produce_message(
                 producer,
                 topic_train,
-                {"bucket": out_bucket, "object": train_obj, "size": len(train_bytes), "v": 1, "config_hash": config_hash, "identifier": identifier},
+                {"bucket": out_bucket, "object": train_obj, "size": len(train_bytes), "v": 1, "identifier": identifier},
                 key="train-claim",
             )
             produce_message(
                 producer,
                 topic_infer,
-                {"bucket": out_bucket, "object": test_obj, "object_key": test_obj, "size": len(test_bytes), "operation": "post: test data", "v": 1, "config_hash": config_hash, "identifier": identifier},
+                {"bucket": out_bucket, "object": test_obj, "object_key": test_obj, "size": len(test_bytes), "operation": "post: test data", "v": 1, "identifier": identifier},
                 key="inference-claim",
             )
 
         duration_ms = int((time.time() - start) * 1000)
-        _log("success", identifier=identifier, config_hash=config_hash, object_key=train_obj, duration_ms=duration_ms, result="ok")
+        _log("success", identifier=identifier, object_key=train_obj, duration_ms=duration_ms, result="ok")
     except Exception as exc:  # noqa: BLE001
         duration_ms = int((time.time() - start) * 1000)
-        _log("failure", identifier=identifier, config_hash=config_hash, error=str(exc), duration_ms=duration_ms, result="error")
+        _log("failure", identifier=identifier, error=str(exc), duration_ms=duration_ms, result="error")
         try:
             if producer:
                 publish_error(
@@ -413,7 +392,7 @@ def run_preprocess() -> None:
                     operation="preprocess",
                     status="Failure",
                     error_details=str(exc),
-                    payload={"config_hash": config_hash},
+                    payload={"identifier": identifier},
                 )
         except Exception:
             pass

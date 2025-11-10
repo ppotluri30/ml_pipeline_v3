@@ -1,0 +1,79 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: train-gru
+  labels:
+    app: train-gru
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: train-gru
+  template:
+    metadata:
+      labels:
+        app: train-gru
+    spec:
+      containers:
+        - name: train-gru
+          image: train:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: GATEWAY_URL
+              value: http://fastapi-app:8000
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: kafka:9092
+            - name: CONSUMER_TOPIC
+              value: training-data
+            - name: CONSUMER_GROUP_ID
+              value: train-gru
+            - name: PRODUCER_TOPIC
+              value: model-training
+            - name: MLFLOW_TRACKING_URI
+              value: http://mlflow:5000
+            - name: MLFLOW_S3_ENDPOINT_URL
+              value: http://minio:9000
+            - name: AWS_ACCESS_KEY_ID
+              value: minioadmin
+            - name: AWS_SECRET_ACCESS_KEY
+              value: minioadmin
+            - name: AWS_S3_ADDRESSING_STYLE
+              value: path
+            - name: AWS_DEFAULT_REGION
+              value: us-east-1
+            - name: MODEL_TYPE
+              value: GRU
+            - name: TRAIN_TEST_SPLIT
+              value: "0.8"
+            - name: INPUT_SEQ_LEN
+              value: "10"
+            - name: OUTPUT_SEQ_LEN
+              value: "1"
+            - name: HIDDEN_SIZE
+              value: "128"
+            - name: NUM_LAYERS
+              value: "2"
+            - name: BATCH_SIZE
+              value: "64"
+            - name: EPOCHS
+              value: "10"
+            - name: EARLY_STOPPING
+              value: "true"
+            - name: PATIENCE
+              value: "30"
+            - name: LEARNING_RATE
+              value: "0.0001"
+            - name: FAILURE_MAX_RETRIES
+              value: "3"
+            - name: IDENTIFIER
+              value: default
+            - name: ENABLE_XAI
+              value: "false"
+            - name: DEFAULT_CONFIG_HASH
+              value: baseline
+            - name: SKIP_DUPLICATE_CONFIGS
+              value: "1"
+            - name: DUP_CACHE_MAX
+              value: "500"
+

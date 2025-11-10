@@ -385,7 +385,7 @@ def message_handler(service: Inferencer, message_queue: queue.Queue):
                         model_type_upper = (service.model_type or service.current_run_name or "").upper()
                         if (not allowed) or (model_type_upper in allowed):
                             if service.df is not None:
-                                service.perform_inference(service.df)
+                                service.perform_inference(service.get_df_copy())
                         else:
                             print({
                                 "service": "inference",
@@ -540,7 +540,7 @@ def message_handler(service: Inferencer, message_queue: queue.Queue):
                             # Pass currently set service.model_type so enrichment does not re-use stale value
                             _enrich_loaded_model(service, run_id, service.model_type or model_type)
                         if service.current_model is not None and service.df is not None:
-                            service.perform_inference(service.df)
+                            service.perform_inference(service.get_df_copy())
                         else:
                             print("Promotion message missing run_id/model_uri; sending to DLQ")
                             publish_error(service.producer, service.dlq_topic, "Promotion Message Parse", "Failure", "Incomplete promotion message", claim_check)
@@ -715,7 +715,7 @@ def _attempt_load_promoted(service: Inferencer):
         # If both model & data present now, run inference immediately.
         if service.current_model is not None and service.df is not None:
             try:
-                service.perform_inference(service.df)
+                service.perform_inference(service.get_df_copy())
             except Exception as ie:  # noqa: BLE001
                 print({"service": "inference", "event": "startup_inference_fail", "error": str(ie)})
     except Exception as e:  # noqa: BLE001

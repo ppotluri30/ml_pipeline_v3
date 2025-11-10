@@ -1,7 +1,7 @@
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
-  name: inference
+  name: inference-hpa
   labels:
     app: inference
 spec:
@@ -10,29 +10,32 @@ spec:
     kind: Deployment
     name: inference
   minReplicas: 2
-  maxReplicas: 20
+  maxReplicas: 12
   metrics:
     - type: Resource
       resource:
         name: cpu
         target:
           type: Utilization
-          averageUtilization: 70
+          averageUtilization: 85  # Aggressive: scale up when CPU > 85%
   behavior:
     scaleUp:
-      stabilizationWindowSeconds: 0
+      stabilizationWindowSeconds: 0  # Immediate reaction to load spikes
       policies:
         - type: Pods
-          value: 4
+          value: 3  # Add 3 pods quickly
           periodSeconds: 15
         - type: Percent
-          value: 100
+          value: 100  # Or double capacity
           periodSeconds: 15
-      selectPolicy: Max
+      selectPolicy: Max  # Choose most aggressive policy
     scaleDown:
-      stabilizationWindowSeconds: 60
+      stabilizationWindowSeconds: 180  # Wait 3 minutes before scaling down
       policies:
         - type: Pods
-          value: 1
-          periodSeconds: 60
-      selectPolicy: Min
+          value: 1  # Remove 1 pod at a time
+          periodSeconds: 120  # Every 2 minutes
+        - type: Percent
+          value: 25  # Or remove 25% of pods
+          periodSeconds: 120
+      selectPolicy: Min  # Choose most conservative policy

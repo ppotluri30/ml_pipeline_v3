@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np
 import mlflow
 from mlflow.models.signature import ModelSignature
 from mlflow.pyfunc.model import PythonModel
@@ -71,21 +72,17 @@ class ProphetMultiFeatureModel(PythonModel):
         self.feature_columns = feature_columns
         self.model_params = model_params
 
-        # Prepare arguments for each parallel task
+        # Prepare arguments for each task
         tasks = [
             (col, df[["ds", col, *exog_columns]], self.model_params, exog_columns)
             for col in feature_columns if col != "ds"
         ]
 
-        # Use ProcessPoolExecutor to fit models in parallel
-        # The number of workers defaults to the number of CPUs on the machine.
-        with ProcessPoolExecutor(max_workers=max_workers) as executor:
-            # Use as_completed to process results as they finish
-            futures = [executor.submit(self._fit_feature, task) for task in tasks]
-            for future in as_completed(futures):
-                column, model = future.result()
-                self.models[column] = model
-                print(f"Finished fitting model for: {column}")
+        # Fit models sequentially to avoid Prophet stan_backend serialization issues
+        for task in tasks:
+            column, model = self._fit_feature(task)
+            self.models[column] = model
+            print(f"Finished fitting model for: {column}")
 
     @staticmethod
     def _predict_feature(args) -> Tuple[str, pd.DataFrame]:
@@ -141,11 +138,10 @@ class ProphetMultiFeatureModel(PythonModel):
             for col in self.feature_columns if col in self.models
         ]
 
-        with ProcessPoolExecutor() as executor:
-            futures = [executor.submit(self._predict_feature, task) for task in tasks]
-            for future in as_completed(futures):
-                _, predictions_df = future.result()
-                predictions.append(predictions_df)
+        # Predict sequentially to avoid Prophet serialization issues
+        for task in tasks:
+            _, predictions_df = self._predict_feature(task)
+            predictions.append(predictions_df)
 
         # Concatenate the ds column with all prediction DataFrames
         all_predictions = pd.concat(predictions, axis=1)
@@ -276,9 +272,23 @@ class StatsForecastMultiFeatureModel(PythonModel):
         self.feature_columns = feature_columns
         self.model_params = model_params
         self.model_type = model_params.get("model_type", "undefined")
-        self.exog_columns = exog_columns
         
-        exog_df = df[exog_columns] if exog_columns else None
+        # Filter exogenous columns to avoid rank deficiency
+        # Remove constant columns and low-variance columns that cause multicollinearity
+        filtered_exog = []
+        if exog_columns:
+            for col in exog_columns:
+                if col in df.columns:
+                    col_std = df[col].std()
+                    col_nunique = df[col].nunique()
+                    # Keep column if it has variance > 1e-6 and more than 1 unique value
+                    if col_std > 1e-6 and col_nunique > 1:
+                        filtered_exog.append(col)
+                    else:
+                        print(f"Dropping exog column {col}: std={col_std:.2e}, nunique={col_nunique}")
+        
+        self.exog_columns = filtered_exog
+        exog_df = df[filtered_exog] if filtered_exog else None
         
         # Create model based on type and parameters
         season_length = model_params.get("season_length", [1])
@@ -298,18 +308,35 @@ class StatsForecastMultiFeatureModel(PythonModel):
             
             print(f"Fitting {self.model_type} model for feature: {column}")
 
-            # Prepare data for this feature
-            feature_df = df[["ds", "unique_id", column] + exog_columns].rename(columns={column: "y"})
+            # Prepare data for this feature - use filtered_exog instead of exog_columns
+            feature_df = df[["ds", "unique_id", column] + filtered_exog].rename(columns={column: "y"})
             
-            # Create and fit StatsForecast model
-            sf = StatsForecast(
-                models=[models_dict[self.model_type]],
-                freq=model_params.get("frequency", 0),
-                n_jobs=max_workers, # Pretty sure the parallelization is done by model type and not by feature, might want to revisit this
-            )
-
-            sf.fit(feature_df) 
-            self.models[column] = sf
+            # Create and fit StatsForecast model with error handling for rank deficiency
+            try:
+                sf = StatsForecast(
+                    models=[models_dict[self.model_type]],
+                    freq=model_params.get("frequency", 0),
+                    n_jobs=max_workers,
+                )
+                sf.fit(feature_df) 
+                self.models[column] = sf
+                print(f"Successfully fitted {self.model_type} for feature: {column}")
+            except (ValueError, np.linalg.LinAlgError) as e:
+                error_str = str(e)
+                if "rank deficient" in error_str or "singular" in error_str:
+                    # Retry without exogenous variables
+                    print(f"Rank deficient error for {column}, retrying without exog features")
+                    feature_df_no_exog = df[["ds", "unique_id", column]].rename(columns={column: "y"})
+                    sf = StatsForecast(
+                        models=[models_dict[self.model_type]],
+                        freq=model_params.get("frequency", 0),
+                        n_jobs=max_workers,
+                    )
+                    sf.fit(feature_df_no_exog)
+                    self.models[column] = sf
+                    print(f"Successfully fitted {self.model_type} for {column} WITHOUT exog")
+                else:
+                    raise
     
     def predict(self, context, model_input, params: Optional[Dict[str, Any]] = None) -> pd.DataFrame:
         """

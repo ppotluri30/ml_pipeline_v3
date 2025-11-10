@@ -96,7 +96,7 @@ spec:
   - name: web
     port: 8089
     targetPort: 8089
-    nodePort: 30089  # Accessible at localhost:30089
+    nodePort: 30889  # Accessible at localhost:30889
     protocol: TCP
   - name: master-p1
     port: 5557

@@ -1,6 +1,7 @@
 from client_utils import post_file
 from data_utils import window_data, check_uniform, time_to_feature, subset_scaler, _fix_zero_scale
 from kafka_utils import produce_message, publish_error
+from trace_utils import trace_df_operation, trace_dataframe, trace_operation, trace_error, TRACE_ENABLED
 import numpy as np
 import pandas as pd
 import mlflow
@@ -54,6 +55,8 @@ class Inferencer:
         self.dlq_topic = dlq_topic
         self.output_topic = output_topic
         self.df = None
+        # Lock to protect concurrent access / mutation of self.df
+        self._df_lock = threading.RLock()
         self.input_seq_len = 0
         self.output_seq_len = 0
         self.current_model = None
@@ -65,6 +68,8 @@ class Inferencer:
         # Track emitted (run_id, prediction_hash) to prevent duplicate JSONL rows
         self._emitted_prediction_keys: set[tuple[str, str]] = set()
         self._emitted_prediction_lock = threading.Lock()
+        # Lock to protect reads/writes to last_prediction_response
+        self._last_prediction_lock = threading.Lock()
         # Track active inference jobs for visibility/metrics without blocking concurrency
         self._active_jobs = 0
         self._active_jobs_lock = threading.Lock()
@@ -73,6 +78,43 @@ class Inferencer:
         self.simulate_delay_secs = SIMULATE_DELAY_SECS
         self._last_inference_timings = None
         logger.info("SIMULATE_DELAY_SECS=%s", self.simulate_delay_secs)
+
+    # ----------------- Thread-safe helpers for shared state -----------------
+    def get_df_copy(self) -> Optional[pd.DataFrame]:
+        """Return a deep copy of the current service dataframe or None.
+
+        Uses an RLock to ensure a consistent snapshot is returned.
+        """
+        with self._df_lock:
+            if self.df is None:
+                return None
+            try:
+                return self.df.copy(deep=True)
+            except Exception:
+                # Best-effort fallback to shallow copy if deep fails
+                return self.df.copy()
+
+    def set_df(self, df: Optional[pd.DataFrame]) -> None:
+        """Atomically replace the service dataframe."""
+        with self._df_lock:
+            self.df = df
+
+    def get_last_prediction_copy(self) -> Optional[dict]:
+        with self._last_prediction_lock:
+            val = getattr(self, "last_prediction_response", None)
+            if val is None:
+                return None
+            try:
+                return val.copy()
+            except Exception:
+                return dict(val)
+
+    def set_last_prediction(self, payload: dict) -> None:
+        with self._last_prediction_lock:
+            try:
+                self.last_prediction_response = payload.copy()
+            except Exception:
+                self.last_prediction_response = dict(payload)
 
     async def simulate_delay_if_enabled(self) -> None:
         delay = _read_simulated_delay()
@@ -302,6 +344,7 @@ class Inferencer:
         with self._active_jobs_lock:
             return self._active_jobs
 
+    @trace_df_operation
     def perform_inference(self, df_eval: Optional[pd.DataFrame] = None, inference_length: Optional[int] = None):
         """Execute inference.
 
@@ -317,13 +360,18 @@ class Inferencer:
         Optional[pd.DataFrame]
             Predictions dataframe (inverse scaled when possible) or None if skipped.
         """
+        trace_operation("perform_inference_start", df_eval_provided=df_eval is not None, has_model=self.current_model is not None)
+        
         if df_eval is None:
             if self.df is None:
+                trace_error("perform_inference", ValueError("No data"), message="No data provided for inference and service dataframe is empty")
                 print("No data provided for inference and service dataframe is empty.")
                 return None
             # CRITICAL: Deep copy shared DataFrame to prevent concurrent modification
             df_eval = self.df.copy(deep=True)
+            trace_dataframe("after_service_df_copy", df_eval, {"source": "self.df"}, "perform_inference")
         else:
+            trace_dataframe("perform_inference_entry", df_eval, {"source": "request_override"}, "perform_inference")
             if os.getenv("INFER_VERBOSE_DATA", "0") in {"1","true","TRUE"}:
                 try:
                     print("Raw data")
@@ -332,6 +380,7 @@ class Inferencer:
                 except Exception:
                     pass
         if self.current_model is None:
+            trace_operation("no_model_loaded", action="defer_inference")
             print("[INFO] Model not loaded yet. Deferring inference (no DLQ).")
             return None
         local_inference_length = int(inference_length) if inference_length is not None else INFERENCE_LENGTH
@@ -345,6 +394,7 @@ class Inferencer:
             self._last_inference_timings = {k: float(v) for k, v in timings.items()}
 
         print({"service": "inference", "event": "predict_inference_start", "inference_length": int(local_inference_length)})
+        trace_operation("inference_params", input_seq_len=self.input_seq_len, output_seq_len=self.output_seq_len, inference_length=local_inference_length)
         try:
             total_rows = len(df_eval.index)
             min_needed = self.input_seq_len + self.output_seq_len

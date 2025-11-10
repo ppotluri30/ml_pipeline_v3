@@ -64,11 +64,7 @@ def callback(message):
 
 FAILURE_MAX_RETRIES = int(os.environ.get("FAILURE_MAX_RETRIES", "3"))
 _failure_counts = {}
-# Duplicate suppression controls (avoid infinite loops on same config hash)
-SKIP_DUPLICATE_CONFIGS = os.environ.get("SKIP_DUPLICATE_CONFIGS", "1").lower() in {"1","true","yes"}
-from typing import Set, Tuple
-_processed_config_models: Set[Tuple[str, str]] = set()
-MAX_PROCESSED_CACHE = int(os.environ.get("DUP_CACHE_MAX", "500"))
+# DUPLICATE DETECTION DISABLED - removed all caching logic
 
 
 def _extract_meta(schema):
@@ -152,25 +148,14 @@ def message_handler():
                 message_queue.task_done()
                 continue
 
-            # Duplicate suppression: skip if this model+config already processed successfully
+            # DUPLICATE DETECTION DISABLED: Always train, no caching
             model_type = os.environ.get("MODEL_TYPE", "UNKNOWN")
-            cfg_hash = md.get('config_hash') or os.environ.get("DEFAULT_CONFIG_HASH") or "default_cfg"
-            signature = (model_type, cfg_hash)
-            if SKIP_DUPLICATE_CONFIGS and signature in _processed_config_models:
-                _jlog("train_skip_duplicate", model_type=model_type, config_hash=cfg_hash, object_key=object_key)
-                _commit(consumer, msg)
-                message_queue.task_done()
-                continue
-
+            
             try:
-                _jlog("train_start", object_key=object_key, config_hash=md.get('config_hash'))
+                _jlog("train_start", object_key=object_key)
                 main(df, scaler, preprocess_meta=md)
-                _jlog("train_complete", object_key=object_key, config_hash=md.get('config_hash'))
+                _jlog("train_complete", object_key=object_key)
                 _failure_counts.pop(object_key, None)
-                if SKIP_DUPLICATE_CONFIGS and signature not in _processed_config_models:
-                    _processed_config_models.add(signature)
-                    if len(_processed_config_models) > MAX_PROCESSED_CACHE:
-                        _processed_config_models.pop()
                 _commit(consumer, msg)
             except Exception as e:  # noqa: BLE001
                 _jlog("train_error", error=str(e), object_key=object_key)
@@ -180,7 +165,7 @@ def message_handler():
                     _jlog("train_dlq", object_key=object_key, failures=fc)
                     try:
                         producer = create_producer()
-                        publish_error(producer, f"DLQ-{os.environ.get('PRODUCER_TOPIC','training-data')}", "nonml_train", "Failure", str(e), {"object_key": object_key, "config_hash": md.get('config_hash')})
+                        publish_error(producer, f"DLQ-{os.environ.get('PRODUCER_TOPIC','training-data')}", "nonml_train", "Failure", str(e), {"object_key": object_key})
                         _commit(consumer, msg)
                     except Exception:
                         pass
@@ -447,14 +432,13 @@ def main(df: pd.DataFrame, scaler, experiment_name: str = "NonML", preprocess_me
                 "status": "SUCCESS",
                 "experiment": experiment_name,
                 "run_name": run_name,
-                "config_hash": CONFIG_HASH,
                 "run_id": run.info.run_id,
             }
             produce_message(producer, topic, success_payload, key=f"trained-{MODEL_TYPE}")
             _jlog("train_success_publish", run_id=run.info.run_id, model_type=MODEL_TYPE, config_hash=CONFIG_HASH)
         except Exception as pe:  # noqa: BLE001
             try:
-                publish_error(create_producer(), f"DLQ-{os.environ.get('PRODUCER_TOPIC','model-training')}", "Publish training success", "Failure", str(pe), {"model_type": MODEL_TYPE, "config_hash": CONFIG_HASH})
+                publish_error(create_producer(), f"DLQ-{os.environ.get('PRODUCER_TOPIC','model-training')}", "Publish training success", "Failure", str(pe), {"model_type": MODEL_TYPE})
             except Exception:
                 pass
             _jlog("train_success_publish_fail", error=str(pe), model_type=MODEL_TYPE, config_hash=CONFIG_HASH)

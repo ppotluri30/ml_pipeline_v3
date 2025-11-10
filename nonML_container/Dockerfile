@@ -40,13 +40,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 RUN --mount=type=cache,target=/root/.cache/pip \
-        --mount=type=bind,source=requirements.txt,target=requirements.txt \
+        --mount=type=bind,source=nonML_container/requirements.txt,target=requirements.txt \
         python -m pip install --no-cache-dir -r requirements.txt
 
 # Switch to the non-privileged user to run the application.
 USER appuser
 
-COPY . .
+COPY nonML_container/ .
+COPY shared/ /app/shared/
 
 EXPOSE 8000
 

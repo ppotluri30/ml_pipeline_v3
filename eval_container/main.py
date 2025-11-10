@@ -101,6 +101,63 @@ def select_best(runs_df: pd.DataFrame) -> Optional[pd.Series]:
     if runs_df.empty:
         return None
     runs_df = runs_df.copy()
+    
+    model_type_col = "params.model_type"
+    config_hash_col = "params.config_hash"
+    
+    if model_type_col not in runs_df.columns:
+        jlog("promotion_no_model_type_column", available_columns=list(runs_df.columns))
+        return None
+    
+    # LIFECYCLE AWARENESS: Group by config_hash and select most recent lifecycle
+    if config_hash_col in runs_df.columns:
+        # Sort by start_time descending to identify most recent lifecycle
+        runs_df.sort_values(["start_time"], ascending=[False], inplace=True)
+        
+        # Group by config_hash and find the most recent one (first row after sort)
+        config_hashes = runs_df[config_hash_col].dropna().unique()
+        if len(config_hashes) > 0:
+            # Get the config_hash of the most recent run
+            most_recent_config = runs_df[runs_df[config_hash_col].notna()].iloc[0][config_hash_col]
+            
+            # Filter to only runs from this lifecycle
+            lifecycle_runs = runs_df[runs_df[config_hash_col] == most_recent_config]
+            excluded_count = len(runs_df) - len(lifecycle_runs)
+            
+            jlog("promotion_lifecycle_selected", 
+                 config_hash=most_recent_config, 
+                 lifecycle_runs=len(lifecycle_runs), 
+                 excluded_older_runs=excluded_count,
+                 run_ids=lifecycle_runs["run_id"].tolist()[:10])
+            
+            runs_df = lifecycle_runs
+        else:
+            jlog("promotion_no_config_hash_found", warning="No config_hash in runs, proceeding without lifecycle filtering")
+    else:
+        jlog("promotion_no_config_hash_column", warning="config_hash column missing, proceeding without lifecycle filtering")
+    
+    if runs_df.empty:
+        jlog("promotion_no_runs_in_lifecycle")
+        return None
+    
+    # Within the selected lifecycle, limit to most recent 3 runs per model_type
+    # Sort by start_time descending (most recent first)
+    runs_df.sort_values(["start_time"], ascending=[False], inplace=True)
+    
+    # Group by model_type and take top 3 most recent per group
+    recent_runs = []
+    for model_type, group in runs_df.groupby(model_type_col):
+        top_n = group.head(3)
+        recent_runs.append(top_n)
+        jlog("promotion_recent_filtered", model_type=model_type, total_runs=len(group), kept_runs=len(top_n), run_ids=top_n["run_id"].tolist()[:3])
+    
+    if not recent_runs:
+        jlog("promotion_no_recent_runs_after_filter")
+        return None
+    
+    runs_df = pd.concat(recent_runs, ignore_index=True)
+    
+    # Compute composite score for filtered runs
     runs_df["promotion_score"] = runs_df.apply(compute_score, axis=1)
     # lowest score wins; tie -> most recent start_time (mlflow stores unix ms)
     runs_df.sort_values(["promotion_score", "start_time"], ascending=[True, False], inplace=True)
@@ -167,20 +224,25 @@ def process_training_message(msg_value: Dict[str, Any]):
             jlog("promotion_ignore", reason="non_success_or_not_trained", operation=operation, status=status)
             return
         model_type = operation.replace("Trained: ", "").strip()
-        if not config_hash:
-            jlog("promotion_skip", reason="missing_config_hash", message=msg_value)
-            return
-        jlog("promotion_start", identifier=identifier, config_hash=config_hash, model_type=model_type)
-        if config_hash not in _completion_tracker:
-            _completion_tracker[config_hash] = set()
+        
+        # Use identifier as grouping key (fallback to "default" if missing)
+        # CACHING DISABLED: config_hash removed, using identifier for synchronization
+        sync_key = identifier if identifier else "default"
+        config_hash = sync_key  # Alias for logging compatibility
+        
+        jlog("promotion_start", identifier=identifier, sync_key=sync_key, model_type=model_type)
+        if sync_key not in _completion_tracker:
+            _completion_tracker[sync_key] = set()
         if model_type:
-            _completion_tracker[config_hash].add(model_type.upper())
-        missing = sorted(list(EXPECTED_MODEL_TYPES - _completion_tracker[config_hash]))
+            _completion_tracker[sync_key].add(model_type.upper())
+        missing = sorted(list(EXPECTED_MODEL_TYPES - _completion_tracker[sync_key]))
         if missing:
-            jlog("promotion_waiting_for_models", config_hash=config_hash, have=sorted(list(_completion_tracker[config_hash])), missing=missing, expected=sorted(list(EXPECTED_MODEL_TYPES)))
+            jlog("promotion_waiting_for_models", sync_key=sync_key, have=sorted(list(_completion_tracker[sync_key])), missing=missing, expected=sorted(list(EXPECTED_MODEL_TYPES)))
             return
-        jlog("promotion_all_models_present", config_hash=config_hash, models=sorted(list(_completion_tracker[config_hash])))
-        filter_string = f"params.config_hash = '{config_hash}'"
+        jlog("promotion_all_models_present", sync_key=sync_key, models=sorted(list(_completion_tracker[sync_key])))
+        
+        # CACHING DISABLED: Search all recent runs (no config_hash filtering)
+        filter_string = None
         # Expanded search: include ALL experiments so that heterogeneous model families (e.g. PROPHET in 'NonML' experiment
         # and GRU/LSTM in another) are all considered. Previously omission of experiment_ids could implicitly scope search
         # to an active/default experiment, excluding Prophet runs.
@@ -213,10 +275,10 @@ def process_training_message(msg_value: Dict[str, Any]):
             except Exception as en_err:  # noqa: BLE001
                 jlog("promotion_experiment_named_lookup_fail", error=str(en_err))
         if not exp_ids:
-            jlog("promotion_no_experiments_found", config_hash=config_hash)
+            jlog("promotion_no_experiments_found", sync_key=sync_key)
             return
         try:
-            jlog("promotion_search_experiments", config_hash=config_hash, experiments=experiments_meta)
+            jlog("promotion_search_experiments", sync_key=sync_key, experiments=experiments_meta)
         except Exception:
             pass
         attempt = 0
@@ -231,7 +293,7 @@ def process_training_message(msg_value: Dict[str, Any]):
             missing_model_types = EXPECTED_MODEL_TYPES - present
             if runs_df.empty or missing_model_types:
                 if attempt < PROMOTION_SEARCH_RETRIES - 1:
-                    jlog("promotion_search_retry_wait", config_hash=config_hash, attempt=attempt+1, missing=list(missing_model_types), delay=PROMOTION_SEARCH_DELAY_SEC)
+                    jlog("promotion_search_retry_wait", sync_key=sync_key, attempt=attempt+1, missing=list(missing_model_types), delay=PROMOTION_SEARCH_DELAY_SEC)
                     time.sleep(PROMOTION_SEARCH_DELAY_SEC)
                     attempt += 1
                     continue
@@ -330,6 +392,17 @@ def process_training_message(msg_value: Dict[str, Any]):
             jlog("promotion_root_pointer_write", run_id=payload["run_id"], model_type=payload.get("model_type"), config_hash=config_hash)
         except Exception as root_ptr_err:  # noqa: BLE001
             jlog("promotion_root_pointer_fail", error=str(root_ptr_err))
+        
+        # Tag the promoted run in MLflow so inference fallback can discover it
+        try:
+            from mlflow.tracking import MlflowClient
+            client = MlflowClient()
+            promoted_run_id = payload["run_id"]
+            client.set_tag(promoted_run_id, "promoted", "true")
+            jlog("promotion_mlflow_tag_set", run_id=promoted_run_id, tag="promoted", value="true")
+        except Exception as tag_err:  # noqa: BLE001
+            jlog("promotion_mlflow_tag_fail", run_id=payload.get("run_id"), error=str(tag_err))
+        
         produce_message(producer, MODEL_SELECTED_TOPIC, payload, key="promotion")
         jlog("promotion_publish", run_id=payload["run_id"], config_hash=config_hash)
     except Exception as e:  # noqa: BLE001

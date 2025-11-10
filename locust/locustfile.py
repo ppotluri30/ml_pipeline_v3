@@ -208,13 +208,13 @@ def _build_synthetic_predict_payload(
         print(f"[LOCUST_GENERATE] Generated {len(times)} timestamps")
         print(f"[LOCUST_GENERATE] Unique count: {len(set(times))}")
         print(f"[LOCUST_GENERATE] Sample: {times[:3]}")
-        print(f"[LOCUST_GENERATE] Field name will be: 'time'")
+        print(f"[LOCUST_GENERATE] Field name will be: 'ts'")
     # ===== END DIAGNOSTIC LOGGING =====
     
     base_seq = [float(i % 50) for i in range(total)]
     down_series = [v * 1_000_000.0 + 5_000_000.0 for v in base_seq]
     data = {
-        "time": times,
+        "ts": times,
         "down": down_series,
         "up": [v * 1000.0 + 1000.0 for v in base_seq],
         "rnti_count": [2000.0 + v for v in base_seq],
@@ -229,7 +229,7 @@ def _build_synthetic_predict_payload(
     }
 
     return {
-        "index_col": "time",
+        "index_col": "ts",
         "data": data,
         "inference_length": max(1, output_len),
     }
@@ -279,7 +279,7 @@ def _next_predict_payload() -> dict:
     DEBUG_ENABLED = os.getenv("DEBUG_LOCUST_PAYLOAD", "0") in {"1", "true", "TRUE"}
     if DEBUG_ENABLED and seq < 3:
         data_keys = list(payload.get("data", {}).keys()) if "data" in payload else []
-        data_rows = len(payload.get("data", {}).get("time", [])) if "data" in payload else 0
+        data_rows = len(payload.get("data", {}).get("ts", [])) if "data" in payload else 0
         print(f"[LOCUST_PAYLOAD_GEN] seq={seq} mode=SYNTHETIC_ONLY data_keys={data_keys} rows={data_rows}")
     
     # DEBUG: Print payload structure for first few requests
@@ -288,7 +288,7 @@ def _next_predict_payload() -> dict:
         print(f"[LOCUST_DEBUG] Payload seq={seq}:")
         print(f"  index_col: {payload.get('index_col')}")
         print(f"  data keys: {list(payload.get('data', {}).keys())}")
-        print(f"  first 3 times: {payload.get('data', {}).get('time', [])[:3]}")
+        print(f"  first 3 timestamps: {payload.get('data', {}).get('ts', [])[:3]}")
     
     # Optional: Log first payload for debugging
     if seq == 0 and os.getenv("DEBUG_LOCUST_PAYLOAD", "0") == "1":
@@ -593,7 +593,7 @@ class PipelineUser(HttpUser):
                 "status_code": None if pr is None else pr.status_code,
                 "ok": ok,
                 "mode": "synthetic",
-                "rows": len(payload.get("data", {}).get("time", [])),
+                "rows": len(payload.get("data", {}).get("ts", [])),
                 "in_len": in_len,
                 "out_len": out_len,
             })
@@ -689,7 +689,7 @@ class PipelineUser(HttpUser):
                 ts_unique = None
                 ts_total = None
                 
-                for field in ["time", "ts", "timestamp", "date"]:
+                for field in ["ts", "time", "timestamp", "date"]:
                     if field in data:
                         ts_field = field
                         ts_values = data[field]

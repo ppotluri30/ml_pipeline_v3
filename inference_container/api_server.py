@@ -16,6 +16,7 @@ from fastapi import Body, FastAPI, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 
 from data_utils import strip_timezones, time_to_feature
+from trace_utils import trace_df_operation, trace_dataframe, trace_operation, trace_error, TRACE_ENABLED
 
 InferenceHTTPError = None  # Backwards compatibility shim; local pool deprecated
 
@@ -453,6 +454,7 @@ def _format_missing_columns_error(exc: KeyError) -> str:
     return str(exc)
 
 
+@trace_df_operation
 def _prepare_dataframe_for_inference(
     req_obj: PredictRequest,
     service: Any | None,
@@ -462,6 +464,8 @@ def _prepare_dataframe_for_inference(
     Returns the prepared dataframe plus the list of required base feature columns enforced.
     Raises HTTPException(400) for validation failures so the caller can short-circuit.
     """
+    
+    trace_operation("prepare_start", func="_prepare_dataframe_for_inference")
 
     data = getattr(req_obj, "data", None)
     if not data:
@@ -471,7 +475,9 @@ def _prepare_dataframe_for_inference(
 
     try:
         df_tmp = pd.DataFrame(data)
+        trace_dataframe("after_dataframe_creation", df_tmp, {"data_keys": list(data.keys())}, "_prepare_dataframe_for_inference")
     except Exception as exc:  # noqa: BLE001
+        trace_error("_prepare_dataframe_for_inference", exc, stage="dataframe_creation")
         raise HTTPException(status_code=400, detail=f"Failed to interpret 'data' payload: {exc}") from exc
 
     if df_tmp.empty:
@@ -491,13 +497,30 @@ def _prepare_dataframe_for_inference(
         if candidate not in df_tmp.columns:
             continue
         try:
+            # Log raw timestamp values for debugging
+            raw_values = df_tmp[candidate].head(5).tolist()
+            print(f"[TIMESTAMP_PARSE] Parsing column '{candidate}': sample={raw_values}")
+            trace_operation("before_to_datetime", func="_prepare_dataframe_for_inference", 
+                          candidate=candidate, raw_sample=raw_values, total_rows=len(df_tmp))
+            
             idx = pd.to_datetime(df_tmp[candidate], errors="coerce")
-        except Exception:
+            
+            # Log parsed results
+            parsed_sample = idx.head(5).tolist()
+            unique_count = idx.nunique()
+            print(f"[TIMESTAMP_PARSE] Parsed result: unique={unique_count}/{len(idx)} sample={parsed_sample}")
+            trace_operation("after_to_datetime", func="_prepare_dataframe_for_inference",
+                          candidate=candidate, unique_count=int(unique_count), total=len(idx),
+                          parsed_sample=[str(ts) for ts in parsed_sample])
+        except Exception as e:
+            print(f"[TIMESTAMP_PARSE] Failed to parse '{candidate}': {e}")
+            trace_error("_prepare_dataframe_for_inference", e, stage="to_datetime", candidate=candidate)
             continue
         if idx.isna().any():
             raise HTTPException(status_code=400, detail=f"Column '{candidate}' contains invalid timestamps")
         df_tmp = df_tmp.drop(columns=[candidate])
         df_tmp.index = idx
+        trace_dataframe("after_set_index", df_tmp, {"candidate": candidate}, "_prepare_dataframe_for_inference")
         assigned_index = True
         break
 
@@ -505,11 +528,30 @@ def _prepare_dataframe_for_inference(
         raise HTTPException(status_code=400, detail="Unable to determine a valid datetime index from request data")
 
     df_tmp = df_tmp.sort_index()
+    trace_dataframe("after_sort_index", df_tmp, {}, "_prepare_dataframe_for_inference")
+    
     df_tmp, _ = strip_timezones(df_tmp)
+    trace_dataframe("after_strip_timezones", df_tmp, {}, "_prepare_dataframe_for_inference")
+    
     if not isinstance(df_tmp.index, pd.DatetimeIndex):
         raise HTTPException(status_code=400, detail="Index must be datetime after timezone normalization")
     if df_tmp.empty:
         raise HTTPException(status_code=400, detail="Request data must include at least one row after normalization")
+    
+    # CRITICAL: Detect duplicate timestamps that would cause "Time frequency is zero" errors
+    unique_timestamps = df_tmp.index.nunique()
+    total_rows = len(df_tmp)
+    trace_operation("duplicate_check", func="_prepare_dataframe_for_inference",
+                  unique_timestamps=int(unique_timestamps), total_rows=int(total_rows))
+    
+    if unique_timestamps == 1 and total_rows > 1:
+        trace_error("_prepare_dataframe_for_inference", 
+                   ValueError(f"All timestamps identical: {df_tmp.index[0]}"),
+                   stage="duplicate_validation", unique_timestamps=int(unique_timestamps), total_rows=int(total_rows))
+        raise HTTPException(
+            status_code=400, 
+            detail=f"All {total_rows} timestamps are identical ({df_tmp.index[0]}). Expected unique timestamps for time-series inference."
+        )
 
     conversion_failures: List[str] = []
     for column in df_tmp.columns:
@@ -527,6 +569,8 @@ def _prepare_dataframe_for_inference(
             raise HTTPException(status_code=400, detail=f"Missing required feature columns: {', '.join(sorted(missing_base))}")
 
     df_prepared = time_to_feature(df_tmp)
+    trace_dataframe("after_time_to_feature", df_prepared, {}, "_prepare_dataframe_for_inference")
+    
     return df_prepared, sorted(required_base)
 
 
@@ -644,13 +688,13 @@ async def _prewarm_if_needed():  # pragma: no cover (performance side-effect)
         if getattr(inf, "model_class", "").lower() == "pytorch" and inf.df is not None:
             try:
                 # Use perform_inference in a thread to avoid blocking loop
-                await asyncio.to_thread(inf.perform_inference, inf.df, 1)
+                await asyncio.to_thread(inf.perform_inference, inf.get_df_copy(), 1)
             except Exception as ie:  # noqa: BLE001
                 _queue_log("prewarm_fail", error=str(ie))
         # Prophet / statsforecast usually compile lazily; trigger generic perform_inference
         elif getattr(inf, "model_class", "").lower() in {"prophet", "statsforecast"} and inf.df is not None:
             try:
-                await asyncio.to_thread(inf.perform_inference, inf.df, 1)
+                await asyncio.to_thread(inf.perform_inference, inf.get_df_copy(), 1)
             except Exception as ie:  # noqa: BLE001
                 _queue_log("prewarm_fail", error=str(ie))
         setattr(inf, "last_prewarm_ms", int((time.time() - t0) * 1000))
@@ -756,10 +800,28 @@ async def predict(
 ):
     req_id = uuid.uuid4().hex[:8]
     wait_ms: Optional[float] = None
+    
+    # DEBUG: Log what we received
+    if os.getenv("DEBUG_PAYLOAD_TRACE", "0") == "1":
+        print(f"[PREDICT_DEBUG] req_id={req_id}: req type={type(req)}", flush=True)
+        print(f"[PREDICT_DEBUG] req_id={req_id}: req is None? {req is None}", flush=True)
+        if req is not None:
+            print(f"[PREDICT_DEBUG] req_id={req_id}: has data attr? {hasattr(req, 'data')}", flush=True)
+            data_val = getattr(req, "data", "ATTR_MISSING")
+            print(f"[PREDICT_DEBUG] req_id={req_id}: data value type={type(data_val)}, is None={data_val is None}", flush=True)
+            if data_val and data_val != "ATTR_MISSING":
+                print(f"[PREDICT_DEBUG] req_id={req_id}: data keys={list(data_val.keys()) if isinstance(data_val, dict) else 'NOT_DICT'}", flush=True)
+                if isinstance(data_val, dict) and "timestamp" in data_val:
+                    ts_sample = data_val["timestamp"][:3] if isinstance(data_val.get("timestamp"), list) else "NOT_LIST"
+                    print(f"[PREDICT_DEBUG] req_id={req_id}: timestamp sample={ts_sample}", flush=True)
     try:
         if _cache_enabled() and ((req is None) or ((not getattr(req, "data", None)) and inference_length is None and getattr(req, "inference_length", None) is None)):
             inf_cached = _get_inferencer()
-            last_response = getattr(inf_cached, "last_prediction_response", None)
+            # Use thread-safe accessor when available
+            if hasattr(inf_cached, "get_last_prediction_copy"):
+                last_response = inf_cached.get_last_prediction_copy()
+            else:
+                last_response = getattr(inf_cached, "last_prediction_response", None)
             if last_response:
                 cached = last_response.copy()
                 cached["status"] = "SUCCESS_CACHED"
@@ -801,9 +863,15 @@ async def predict(
 
     df_for_inference = prepared_df
     if df_for_inference is None:
-        if service is None or getattr(service, "df", None) is None:
+        if service is None:
             raise HTTPException(status_code=400, detail="No cached dataframe available and no data provided")
-        df_for_inference = service.df
+        # Use a deep copy of the cached dataframe to avoid concurrent mutation
+        if hasattr(service, "get_df_copy"):
+            df_for_inference = service.get_df_copy()
+        else:
+            df_for_inference = getattr(service, "df", None)
+        if df_for_inference is None:
+            raise HTTPException(status_code=400, detail="No cached dataframe available and no data provided")
 
     if required_base_columns:
         missing_base = [col for col in required_base_columns if col not in df_for_inference.columns]
@@ -968,7 +1036,10 @@ async def predict(
     }
 
     try:
-        setattr(service, "last_prediction_response", response_payload.copy())
+        if hasattr(service, "set_last_prediction"):
+            service.set_last_prediction(response_payload)
+        else:
+            setattr(service, "last_prediction_response", response_payload.copy())
     except Exception:
         pass
 

@@ -29,13 +29,14 @@ RUN mkdir -p /app/outputs/models && chown -R appuser:appuser /app/outputs
 
 # Install dependencies.
 RUN --mount=type=cache,target=/root/.cache/pip \
-    --mount=type=bind,source=requirements.txt,target=requirements.txt \
+    --mount=type=bind,source=train_container/requirements.txt,target=requirements.txt \
     python -m pip install -r requirements.txt
 
 # Copy the application code (cache bust with CODE_VERSION build arg)
 ARG CODE_VERSION
 ENV CODE_VERSION=${CODE_VERSION}
-COPY . .
+COPY train_container/ .
+COPY shared/ /app/shared/
 # Assert updated main.py contains fallback logic; fail build otherwise
 RUN grep -q "target_fallback" main.py || (echo "ERROR: target_fallback not found in main.py; stale build context" && exit 1)
 RUN echo "Building train_container with CODE_VERSION=${CODE_VERSION}" && grep -n "target_fallback" main.py || true
