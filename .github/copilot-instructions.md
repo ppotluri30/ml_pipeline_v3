@@ -18,6 +18,7 @@
 **Supporting services:**
 - Kafka (message broker), MinIO (object storage), Postgres (MLflow backend), fastapi-app (MinIO gateway)
 - Deployment options: Docker Compose (local), Kubernetes/Helm (production)
+- Monitoring stack: Prometheus (15s scrape), KEDA (15s polling), HPA v2 (CPU/latency/queue metrics)
 
 ---
 
@@ -128,10 +129,37 @@ kubectl get hpa inference-hpa
 kubectl describe hpa inference-hpa
 ```
 
+**Real-time monitoring (Kubernetes):**
+
+```powershell
+# Query Prometheus p95 latency (15s scrape interval)
+$query = 'histogram_quantile(0.95, sum(rate(inference_latency_seconds_bucket[2m])) by (le))'
+kubectl exec deployment/prometheus-server -c prometheus-server -- wget -qO- "http://localhost:9090/api/v1/query?query=$([uri]::EscapeDataString($query))"
+
+# Monitor HPA scaling in real-time
+kubectl get hpa keda-hpa-inference-slo-scaler -w
+
+# Run headless load test
+kubectl exec deployment/locust-master -- locust --headless --host=http://inference:8000 -u 150 -r 10 -t 90s --print-stats
+
+# Check KEDA ScaledObject status
+kubectl get scaledobject inference-slo-scaler -o yaml
+kubectl get --raw "/apis/external.metrics.k8s.io/v1beta1/namespaces/default/s0-prometheus"
+```
+
+**Automated HPA testing:**
+
+```powershell
+# Matrix test with autoscaling validation
+.\scripts\k8s_auto_hpa_tests.ps1 -TestDuration 120 -UserCounts @(50,100,200) -WorkerCounts @(4,8) -HPATargetCPU 70
+
+# Results: reports/k8s_hpa_performance/*.csv, *.md
+```
+
 **Testing:**
 - Unit tests: `pytest inference_container/tests/test_sync_predict.py` (install deps: `pip install -r inference_container/requirements.txt`)
 - Readiness probes: `/readyz` (preprocess, eval), `/healthz` (all services)
-- Metrics: Prometheus format at `http://inference:8000/metrics`
+- Metrics: Prometheus format at `http://inference:8000/metrics` or `/prometheus`
 
 ---
 
@@ -175,6 +203,65 @@ runs/<run-id>/
 3. **Promotion pointer schema changes** → Breaks pointer resolution. Maintain `model_uri`, `run_id`, `model_type`, `config_hash` keys.
 4. **Adding new model types** → Update `EXPECTED_MODEL_TYPES`, add Compose service with unique `CONSUMER_GROUP_ID`, verify eval waits correctly.
 5. **Windows PowerShell CRLF issues** → Locust commands using `/bin/sh -c` conditionals fail; use command arrays instead (see `BACKPRESSURE_NOTES.md`).
+6. **Prometheus NaN values** → Rate calculations need 2+ samples in query window. With 15s scrape interval, use `[2m]` window minimum (8-9 samples).
+7. **KEDA latency threshold mismatches** → `threshold` vs `activationThreshold` in ScaledObject. `activationThreshold` prevents premature scale-down; set lower than `threshold`.
+8. **HPA "Unknown" metrics** → Prometheus adapter not configured or custom metrics API unavailable. Verify: `kubectl get apiservice v1beta1.custom.metrics.k8s.io`.
+
+---
+
+### Monitoring & Autoscaling Configuration
+
+**Critical timing parameters (validated 2025-11-12):**
+
+```yaml
+# Prometheus scrape (ConfigMap: prometheus-server)
+scrape_interval: 15s       # Production validated - balances real-time visibility vs storage
+scrape_timeout: 10s        # Safe for inference response times
+
+# KEDA ScaledObject (inference-slo-scaler)
+pollingInterval: 15        # Matches Prometheus scrape
+cooldownPeriod: 300        # 5 minutes before scale-down
+stabilizationWindowSeconds: 60  # Scale-up delay to prevent flapping
+
+# Query windows for rate calculations
+[2m] window                # Minimum for stable rate() with 15s scrape (8-9 samples)
+[5m] window                # Preferred for production latency queries (20+ samples)
+```
+
+**KEDA latency trigger configuration:**
+
+```yaml
+triggers:
+- type: prometheus
+  metadata:
+    serverAddress: http://prometheus-server.default.svc.cluster.local:80
+    query: histogram_quantile(0.95, sum(rate(inference_latency_seconds_bucket[5m])) by (le))
+    threshold: "2.0"         # Scale up if p95 > 2.0s
+    activationThreshold: "1.0"  # Activate scaler if p95 > 1.0s (prevents premature scale-down)
+```
+
+**Prometheus metric queries (PowerShell-safe escaping):**
+
+```powershell
+# P95 latency
+$query = 'histogram_quantile(0.95, sum(rate(inference_latency_seconds_bucket[2m])) by (le))'
+kubectl exec deployment/prometheus-server -c prometheus-server -- wget -qO- "http://localhost:9090/api/v1/query?query=$([uri]::EscapeDataString($query))"
+
+# Average queue length
+$query = 'avg(inference_queue_len)'
+kubectl exec deployment/prometheus-server -c prometheus-server -- wget -qO- "http://localhost:9090/api/v1/query?query=$([uri]::EscapeDataString($query))"
+```
+
+**HPA scaling expectations:**
+
+```
+0-15s:    Load ramp-up, CPU/latency increases
+15-30s:   Metrics breach threshold, KEDA detects
+30-60s:   HPA scaling decision + stabilization window
+60-90s:   New pods starting, becoming ready
+90-180s:  Load distributed, metrics stabilize
+300s+:    Scale-down eligible after cooldown period
+```
 
 ---
 
@@ -203,8 +290,48 @@ docker compose up -d --scale inference=4 inference
 # Or in Kubernetes: kubectl scale deployment inference --replicas=4
 ```
 
+**Debug KEDA scaling issues:**
+```powershell
+# Check ScaledObject status
+kubectl describe scaledobject inference-slo-scaler
+
+# View KEDA operator logs
+kubectl logs -n keda deployment/keda-operator -f
+
+# Query external metrics API directly
+kubectl get --raw "/apis/external.metrics.k8s.io/v1beta1/namespaces/default/s0-prometheus" | ConvertFrom-Json
+
+# Verify Prometheus target health
+kubectl exec deployment/prometheus-server -c prometheus-server -- wget -qO- 'http://localhost:9090/api/v1/targets' | ConvertFrom-Json | Select-Object -ExpandProperty data | Select-Object -ExpandProperty activeTargets | Where-Object { $_.labels.service -eq 'inference' }
+```
+
+**Access monitoring UIs (port-forward required):**
+```powershell
+# Prometheus
+kubectl port-forward deployment/prometheus-server 9090:9090
+# Access: http://localhost:9090
+
+# Grafana
+kubectl port-forward svc/grafana 3000:3000
+# Access: http://localhost:3000
+
+# Locust load testing UI
+kubectl port-forward svc/locust-master 8089:8089
+# Access: http://localhost:8089
+
+# MLflow tracking
+kubectl port-forward svc/mlflow 5000:5000
+# Access: http://localhost:5000
+```
+
 ---
 
-**Related docs:** `README.md` (detailed setup), `BACKPRESSURE_NOTES.md` (load testing), `HPA_TESTING_GUIDE.md` (K8s autoscaling), `.helm/README.md` (Helm deployment)
+**Related docs:** `README.md` (detailed setup), `BACKPRESSURE_NOTES.md` (load testing), `HPA_TESTING_GUIDE.md` (K8s autoscaling), `.helm/README.md` (Helm deployment), `REALTIME_MONITORING_VALIDATION.md` (Prometheus tuning)
 
-Update this file when bucket schemas, promotion contracts, or critical env variables change.
+**PowerShell automation scripts:**
+- `.\scripts\k8s_auto_hpa_tests.ps1` - Automated HPA matrix testing with CSV/Markdown reporting
+- `.\Monitor-LiveLatency.ps1` - Real-time latency monitoring during load tests (requires port-forward to Locust UI)
+- `.\monitor_keda_scaling.ps1` - KEDA scaling event tracker with Prometheus queries
+- `.\run_all_locust_tests.ps1` - Docker Compose load test matrix automation
+
+Update this file when bucket schemas, promotion contracts, critical env variables, or monitoring configurations change.

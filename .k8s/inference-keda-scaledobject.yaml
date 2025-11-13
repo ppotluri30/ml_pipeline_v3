@@ -9,22 +9,22 @@ metadata:
 spec:
   scaleTargetRef:
     name: inference
-  minReplicaCount: 3  # Changed from 2 to maintain minimum capacity
-  maxReplicaCount: 20  # Changed from 12 for high-traffic scenarios
-  pollingInterval: 15  # Check metrics every 15 seconds
-  cooldownPeriod: 300  # Wait 5 minutes before scaling down (was 180)
+  minReplicaCount: 5  # Production baseline - prevent latency collapse
+  maxReplicaCount: 10  # Reduced to prevent node saturation (was 20)
+  pollingInterval: 10  # Check metrics every 10 seconds (was 15)
+  cooldownPeriod: 180  # Wait 3 minutes before scaling down
   advanced:
     horizontalPodAutoscalerConfig:
       behavior:
         scaleUp:
-          stabilizationWindowSeconds: 60  # Changed from 0 - prevent thrashing
+          stabilizationWindowSeconds: 30  # Faster scale-up (was 60)
           policies:
           - type: Pods
-            value: 2  # Add 2 pods per cycle (was 3)
-            periodSeconds: 30  # Every 30 seconds (was 15)
+            value: 2  # Add 2 pods per cycle
+            periodSeconds: 15  # Every 15 seconds (was 30)
           - type: Percent
-            value: 50  # Or 50% of current (was 100%)
-            periodSeconds: 30
+            value: 50  # Or 50% of current
+            periodSeconds: 15
           selectPolicy: Max
         scaleDown:
           stabilizationWindowSeconds: 300  # Keep 5 minutes (was 180)
@@ -37,17 +37,17 @@ spec:
             periodSeconds: 120
           selectPolicy: Min
   triggers:
-  # Primary driver: p95 latency > 500ms (production SLO)
+  # Primary driver: p95 latency > 1.5s (aggressive threshold)
   - type: prometheus
     metadata:
       serverAddress: http://prometheus-server.default.svc.cluster.local:80
       metricName: inference_latency_p95
       query: |
         histogram_quantile(0.95, 
-          sum(rate(inference_latency_seconds_bucket[1m])) by (le)
+          sum(rate(inference_latency_seconds_bucket[2m])) by (le)
         )
-      threshold: "0.500"  # Scale if p95 > 500ms
-      activationThreshold: "0.300"  # Activate if p95 > 300ms
+      threshold: "0.8"  # Scale if p95 > 0.8s (800ms) - production tuning
+      activationThreshold: "0.4"  # Activate if p95 > 0.4s (400ms) - pre-trigger
   # Secondary driver: queue length > 20 jobs
   - type: prometheus
     metadata:

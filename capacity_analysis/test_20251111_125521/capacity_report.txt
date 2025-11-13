@@ -1,0 +1,115 @@
+﻿========================================
+KEDA + HPA HYBRID CAPACITY ANALYSIS
+========================================
+Test Configuration:
+  Users: 200
+  Spawn Rate: 10/s
+  Duration: 300s
+  Samples: 15
+
+========================================
+SCALING BEHAVIOR
+========================================
+Replica Progression:
+  Initial: 10 pods
+  Peak: 10 pods
+  Average: 10 pods
+  Final: 10 pods
+
+Scaling Timeline:
+  First Scale-Up: None
+  First Scale-Down: None
+  Total Scale Events: 0
+
+========================================
+PERFORMANCE METRICS
+========================================
+Latency (Prometheus):
+  p95 Average: 4920ms
+  p95 Peak: 4948ms
+  p50 Average: 3436ms
+  p50 Peak: 3469ms
+
+Queue Depth:
+  Average: 0
+  Peak: 0
+
+Request Rate:
+  Average: 0 req/s
+  Peak: 0 req/s
+
+CPU Utilization:
+  Average: 683m (68%)
+  Peak: 770m (77%)
+
+========================================
+PER-POD CAPACITY ANALYSIS
+========================================
+Pre-Scale Baseline (10 pods):
+  Total RPS: 0 req/s
+  RPS per Pod: 0 req/s
+  Latency (p95): 4928ms
+
+Sustainable Capacity:
+  [WARN] sustainable_RPS_per_pod = 0 req/s [WARN] latency_threshold = 4928ms (EXCEEDED 500ms target) [WARN] Recommendation: Increase minReplicas or reduce load
+
+Production Sizing:
+  For 0 req/s peak:
+    - Minimum pods needed: N/A
+    - Recommended minReplicas: 10 (30% headroom)
+
+========================================
+TRIGGER ANALYSIS
+========================================
+KEDA Prometheus Triggers:
+  p95 Latency > 500ms: [FIRED] max: 4948ms
+  Queue Length > 20: [NOT FIRED] max: 0
+
+HPA Resource Triggers:
+  CPU > 85%: [NOT FIRED] max: 770m
+  Memory > 80%: [NOT TRIGGERED]
+
+Scaling Driver:
+  Primary: KEDA Latency Trigger (Prometheus)
+
+========================================
+HYBRID CONTROLLER COORDINATION
+========================================
+KEDA ScaledObject:
+  Status: 
+  Triggers: prometheus (latency, queue), cpu, memory
+
+HPA (KEDA-managed):
+  Name: keda-hpa-inference-slo-scaler
+  Current Replicas: 10
+  Desired Replicas: 10
+
+Coordination: [WARN] Check if triggers are too conservative
+
+========================================
+RECOMMENDATIONS
+========================================
+Configuration Tuning:
+Capacity Planning:
+  1. Baseline minReplicas: 10 pods
+  2. Sustainable load per pod: ~0 req/s at <500ms latency
+  3. Scale-up buffer: Plan for 20 pods for peak traffic
+  4. Cooldown: Current 180s appropriate for production
+
+Production Deployment:
+  1. Enable Prometheus recording rules for stable metrics
+  2. Set up Grafana dashboards for real-time monitoring
+  3. Configure PagerDuty alerts for:
+     - p95 latency > 1000ms for 2 minutes
+     - Queue depth > 50 for 1 minute
+     - Scale-up failures or HPA errors
+  4. Schedule load tests quarterly to revalidate capacity
+
+========================================
+OUTPUT FILES
+========================================
+  Telemetry: .\capacity_analysis\test_20251111_125521\telemetry.csv
+  Summary: .\capacity_analysis\test_20251111_125521\capacity_report.txt
+  Locust Log: .\capacity_analysis\test_20251111_125521\locust.log
+
+========================================

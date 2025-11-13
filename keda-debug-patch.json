@@ -1,0 +1,7 @@
+[
+  {
+    "op": "replace",
+    "path": "/spec/template/spec/containers/0/args/2",
+    "value": "--zap-log-level=debug"
+  }
+]

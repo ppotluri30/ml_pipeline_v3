@@ -1,0 +1,35 @@
+﻿HYBRID AUTOSCALING VALIDATION REPORT
+Generated: 2025-11-12 10:17:15
+
+Test Configuration:
+  Users: 150
+  Spawn Rate: 10/s
+  Duration: 180 seconds
+  Baseline Replicas: 3
+
+Load Test Results:
+  Total Requests: 4267
+  Failed Requests: 15
+  Failure Rate: 0.35%
+
+Scaling Behavior:
+  Min Replicas: 3
+  Max Replicas: 3
+  Avg Replicas: 3
+  Scaling Events: 0
+
+Resource Utilization:
+  Avg CPU: 744m
+  Peak CPU: 996m
+  Avg Memory: 347Mi
+  Peak Memory: 354Mi
+
+Performance Metrics:
+  Avg p95 Latency: 0ms
+  Peak p95 Latency: 0ms
+  Avg Queue Length: 0
+  Peak Queue Length: 0
+
+Data Files:
+  Telemetry CSV: C:\Users\ppotluri\Desktop\ml_pipeline_v3\autoscaling_results\telemetry_20251112_101402.csv
+  Full Report: C:\Users\ppotluri\Desktop\ml_pipeline_v3\autoscaling_results\report_20251112_101402.txt

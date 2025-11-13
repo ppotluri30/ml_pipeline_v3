@@ -1,0 +1,5 @@
+﻿Time,Replicas,p95_Latency_ms,Avg_Queue,CPU_Avg_%,Triggers_Active
+11:52:51,3,N/A,0,9,NO
+11:53:04,3,N/A,0,73,NO
+11:53:16,3,N/A,0,95,NO
+11:53:29,3,N/A,0,66,NO

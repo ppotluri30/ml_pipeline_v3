@@ -1,0 +1,1 @@
+﻿Timestamp,Elapsed_Sec,Replicas,CPU_Min,CPU_Max,CPU_Avg,Mem_Avg_Mi,p95_Latency_ms,p50_Latency_ms,Queue_Len_Avg,Queue_Len_Max,RPS_Estimate,KEDA_Active,HPA_Scaling

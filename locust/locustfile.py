@@ -667,7 +667,7 @@ class PipelineUser(HttpUser):
         # ===== ENHANCED DIAGNOSTIC LOGGING =====
         global _predict_payload_seq
         DEBUG_ENABLED = os.getenv("DEBUG_LOCUST_PAYLOAD", "0") in {"1", "true", "TRUE"}
-        ALWAYS_LOG_FIRST = os.getenv("LOCUST_ALWAYS_LOG_FIRST", "1") in {"1", "true", "TRUE"}
+        ALWAYS_LOG_FIRST = os.getenv("LOCUST_ALWAYS_LOG_FIRST", "0") in {"1", "true", "TRUE"}  # Changed default to "0"
         
         if (_predict_payload_seq < 5 and ALWAYS_LOG_FIRST) or DEBUG_ENABLED:
             import json

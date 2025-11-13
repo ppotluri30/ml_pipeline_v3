@@ -22,7 +22,7 @@ InferenceHTTPError = None  # Backwards compatibility shim; local pool deprecated
 
 # Prometheus metrics (optional dependency)
 try:
-    from prometheus_client import Gauge, Counter, Histogram, start_http_server  # type: ignore
+    from prometheus_client import Gauge, Counter, Histogram, start_http_server, generate_latest, CONTENT_TYPE_LATEST  # type: ignore
     _PROMETHEUS_AVAILABLE = True
 except Exception:
     _PROMETHEUS_AVAILABLE = False
@@ -758,9 +758,9 @@ def metrics():
         "avg_wait_ms": round(avg_wait_ms, 2),
         "max_exec_ms": qm_snapshot["max_exec_ms"],
         "avg_exec_ms": round(avg_exec_ms, 2),
-    "last_prep_ms": qm_snapshot["last_prep_ms"],
-    "max_prep_ms": qm_snapshot["max_prep_ms"],
-    "avg_prep_ms": round(avg_prep_ms, 2),
+        "last_prep_ms": qm_snapshot["last_prep_ms"],
+        "max_prep_ms": qm_snapshot["max_prep_ms"],
+        "avg_prep_ms": round(avg_prep_ms, 2),
         "served_cached": qm_snapshot["served_cached"],
         "event_loop_lag_last_ms": round(loop_snapshot["last_ms"], 3),
         "event_loop_lag_max_ms": round(loop_snapshot["max_ms"], 3),
@@ -768,6 +768,15 @@ def metrics():
         "build_version": build_version,
         "status": "ok",
     }
+
+@app.get("/prometheus")
+def prometheus_metrics():
+    """Prometheus-compatible metrics endpoint (text/plain format)."""
+    if not _PROMETHEUS_AVAILABLE:
+        return Response(content="# Prometheus client not available\n", media_type="text/plain")
+    
+    metrics_output = generate_latest()
+    return Response(content=metrics_output, media_type=CONTENT_TYPE_LATEST)
 
 @app.post("/reload_latest")
 async def reload_latest():  # pragma: no cover (operational endpoint)

@@ -1,0 +1,17 @@
+[
+  {
+    "op": "replace",
+    "path": "/spec/triggers/0/metadata/query",
+    "value": "histogram_quantile(0.95, sum(rate(inference_latency_seconds_bucket[2m])) by (le))"
+  },
+  {
+    "op": "replace",
+    "path": "/spec/triggers/0/metadata/threshold",
+    "value": "2.0"
+  },
+  {
+    "op": "replace",
+    "path": "/spec/triggers/0/metadata/activationThreshold",
+    "value": "1.0"
+  }
+]

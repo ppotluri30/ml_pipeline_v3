@@ -1,0 +1,4 @@
+﻿Timestamp,LocustP95ms,PrometheusP95ms,KEDALatencyms,CurrentReplicas,DesiredReplicas,CPUPercent,QueueLength,ScalingStatus
+11:57:48,N/A,Error,Error,3,3,8,0,Stable-Limited
+11:57:57,N/A,NaN,Error,3,3,9,0,Stable-Limited
+11:58:05,N/A,NaN,Error,3,3,9,0,Stable-Limited

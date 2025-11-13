@@ -5,7 +5,7 @@ metadata:
   labels:
     app: inference
 spec:
-  replicas: 1
+  replicas: 5  # Production baseline - matches KEDA minReplicaCount
   selector:
     matchLabels:
       app: inference
@@ -37,6 +37,8 @@ spec:
               value: inference-data
             - name: CONSUMER_TOPIC_1
               value: model-training
+            - name: PROMOTION_TOPIC
+              value: model-selected
             - name: GATEWAY_URL
               value: http://fastapi-app:8000
             - name: KAFKA_BOOTSTRAP_SERVERS
@@ -51,16 +53,16 @@ spec:
               value: "1"
           resources:
             requests:
-              cpu: "1"
-              memory: "2Gi"
+              cpu: "500m"      # Reduced from 1 CPU (was causing Pending)
+              memory: "1Gi"    # Production standard - 1Gi baseline
             limits:
-              cpu: "1"
-              memory: "2Gi"
+              cpu: "2"         # Allow bursting to 2 CPUs (was 1)
+              memory: "1Gi"    # Match requests for stability
           livenessProbe:
             httpGet:
               path: /healthz
               port: 8000
-            initialDelaySeconds: 30
+            initialDelaySeconds: 40   # Increased from 30s for model loading
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 3
@@ -68,7 +70,7 @@ spec:
             httpGet:
               path: /healthz
               port: 8000
-            initialDelaySeconds: 10
+            initialDelaySeconds: 15   # Increased from 10s for initialization
             periodSeconds: 5
             timeoutSeconds: 3
             failureThreshold: 3

@@ -1,0 +1,74 @@
+﻿========================================
+KEDA SCALING TEST SUMMARY
+========================================
+Test Configuration:
+  Users: 150
+  Spawn Rate: 10/s
+  Duration: 240s
+  Sample Interval: 10s
+  
+Test Execution:
+  Start Time: 2025-11-11 12:05:14
+  End Time: 2025-11-11 12:09:11
+  Samples Collected: 20
+
+----------------------------------------
+LOCUST LOAD TEST RESULTS
+----------------------------------------
+  Total Requests: N/A
+  Failures: N/A
+  Success Rate: N/A%
+  Requests/sec: N/A
+  
+  Latency:
+    Average: N/Ams
+    Median: N/Ams
+    Min: ms
+    Max: ms
+
+----------------------------------------
+SCALING BEHAVIOR
+----------------------------------------
+  Replica Count:
+    Initial: 3
+    Minimum: 3
+    Maximum: 3
+    Average: 3
+    Final: 3
+  
+  Time to First Scale-Up: No scale-up
+  Time to First Scale-Down: No scale-down
+
+----------------------------------------
+PERFORMANCE METRICS
+----------------------------------------
+  CPU Utilization (avg across pods):
+    Average: 719m
+    Maximum: 876m
+  
+  p95 Latency:
+    Average: 0ms
+    Maximum: 0ms
+
+----------------------------------------
+SCALING TRIGGER ANALYSIS
+----------------------------------------  Latency Trigger (>500ms): NO (max: 0ms)
+  CPU Trigger (>85%): YES (max: 876m)
+  
+  Scaling Responsiveness:
+    - No scale-up events detected     - Workload handled by 3 pods
+
+----------------------------------------
+RECOMMENDATIONS
+----------------------------------------  [OK] System stable - no scaling needed
+  [OK] Latency well below threshold (0ms < 500ms)
+  [*] Consider increasing load or lowering latency threshold to test scaling
+
+----------------------------------------
+OUTPUT FILES
+----------------------------------------
+  Telemetry Data: .\scaling_test_results\test_20251111_120458\telemetry.csv
+  Locust Log: .\scaling_test_results\test_20251111_120458\locust_output.log
+  Summary: .\scaling_test_results\test_20251111_120458\test_summary.txt
+
+========================================

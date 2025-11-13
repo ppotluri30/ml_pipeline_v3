@@ -1,0 +1,3 @@
+﻿histogram_quantile(0.95, 
+  sum(rate(inference_latency_seconds_bucket[2m])) by (le)
+)

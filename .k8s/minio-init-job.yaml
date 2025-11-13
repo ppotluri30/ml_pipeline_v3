@@ -1,0 +1,111 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: minio-init-script
+  labels:
+    app: minio-init
+data:
+  init.sh: |
+    #!/bin/sh
+    # Robust MinIO init script – creates required buckets with diagnostics.
+    set -e
+
+    log() { printf '[minio-init] %s\n' "$*"; }
+    warn() { printf '[minio-init][WARN] %s\n' "$*" >&2; }
+    err()  { printf '[minio-init][ERROR] %s\n' "$*" >&2; }
+
+    log "Starting bucket ensure script..."
+
+    MC_ENDPOINT=${MC_ENDPOINT:-http://minio:9000}
+    MC_USER=${MC_USER:-minioadmin}
+    MC_PASS=${MC_PASS:-minioadmin}
+    RETRIES=${RETRIES:-60}
+    SLEEP_SEC=${SLEEP_SEC:-2}
+
+    # Wait for MinIO to be ready
+    i=0
+    last_err=""
+    while ! out=$(mc alias set minio "$MC_ENDPOINT" "$MC_USER" "$MC_PASS" 2>&1); do
+      last_err=$out
+      i=$((i+1))
+      if [ "$i" -ge "$RETRIES" ]; then
+        err "Unable to set alias after $i attempts (endpoint=$MC_ENDPOINT)."
+        if [ -n "$last_err" ]; then
+          err "Last mc alias error: $last_err"
+        fi
+        exit 2
+      fi
+      log "MinIO not ready yet, retry $i/$RETRIES..."
+      sleep "$SLEEP_SEC"
+    done
+
+    log "Alias configured. Ensuring buckets..."
+    # All required buckets for the ML pipeline
+    BUCKETS="mlflow dataset processed-data inference-logs inference-txt-logs model-promotion"
+
+    for b in $BUCKETS; do
+      if mc ls "minio/$b" >/dev/null 2>&1; then
+        log "Bucket $b exists"
+      else
+        if mc mb -p "minio/$b" >/dev/null 2>&1; then
+          log "Created bucket $b"
+        else
+          warn "Could not create bucket $b (may already exist or race)"
+        fi
+      fi
+    done
+
+    log "Current buckets listing:"
+    mc ls minio || true
+    log "Buckets ensured. ✅"
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: minio-init
+  labels:
+    app: minio-init
+spec:
+  ttlSecondsAfterFinished: 300  # Auto-cleanup after 5 minutes
+  template:
+    metadata:
+      labels:
+        app: minio-init
+    spec:
+      restartPolicy: OnFailure
+      initContainers:
+        - name: wait-for-minio
+          image: busybox:latest
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z minio 9000; do
+                echo "Waiting for MinIO service..."
+                sleep 2
+              done
+              echo "MinIO is available"
+      containers:
+        - name: minio-init
+          image: minio/mc:latest
+          command: ["/bin/sh", "/scripts/init.sh"]
+          env:
+            - name: MC_ENDPOINT
+              value: "http://minio:9000"
+            - name: MC_USER
+              value: "minioadmin"
+            - name: MC_PASS
+              value: "minioadmin"
+            - name: RETRIES
+              value: "60"
+            - name: SLEEP_SEC
+              value: "2"
+          volumeMounts:
+            - name: init-script
+              mountPath: /scripts
+      volumes:
+        - name: init-script
+          configMap:
+            name: minio-init-script
+            defaultMode: 0755

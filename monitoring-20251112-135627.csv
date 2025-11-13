@@ -1,0 +1,13 @@
+﻿Timestamp,LocustP95ms,PrometheusP95ms,KEDALatencyms,CurrentReplicas,DesiredReplicas,CPUPercent,QueueLength,ScalingStatus
+13:56:34,77000,NaN,Error,3,3,23,0,Stable
+13:56:46,77000,NaN,Error,3,3,23,0,Stable
+13:56:58,77000,NaN,Error,3,5,206,0,ScalingUp
+13:57:10,77000,NaN,Error,3,5,206,0,ScalingUp
+13:57:16,77000,NaN,Error,3,5,206,0,ScalingUp
+13:57:23,77000,Empty,InvalidFormat,3,5,206,0,ScalingUp
+13:57:29,77000,Empty,InvalidFormat,3,5,206,0,ScalingUp
+13:57:36,77000,Empty,InvalidFormat,3,5,206,0,ScalingUp
+13:57:43,77000,Empty,InvalidFormat,3,5,206,0,ScalingUp
+13:57:49,77000,Empty,InvalidFormat,3,5,206,0,ScalingUp
+13:57:55,77000,Empty,InvalidFormat,3,5,206,0,ScalingUp
+13:58:02,77000,Empty,InvalidFormat,3,5,206,0,ScalingUp

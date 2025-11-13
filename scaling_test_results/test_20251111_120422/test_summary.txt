@@ -1,0 +1,76 @@
+﻿========================================
+KEDA SCALING TEST SUMMARY
+========================================
+Test Configuration:
+  Users: 150
+  Spawn Rate: 10/s
+  Duration: 240s
+  Sample Interval: 10s
+  
+Test Execution:
+  Start Time: 2025-11-11 12:04:39
+  End Time: 2025-11-11 12:04:39
+  Samples Collected: 0
+
+----------------------------------------
+LOCUST LOAD TEST RESULTS
+----------------------------------------
+  Total Requests: N/A
+  Failures: N/A
+  Success Rate: N/A%
+  Requests/sec: N/A
+  
+  Latency:
+    Average: N/Ams
+    Median: N/Ams
+    Min: ms
+    Max: ms
+
+----------------------------------------
+SCALING BEHAVIOR
+----------------------------------------
+  Replica Count:
+    Initial: 3
+    Minimum: 
+    Maximum: 
+    Average: 0
+    Final: 
+  
+  Time to First Scale-Up: No scale-up
+  Time to First Scale-Down: No scale-down
+
+----------------------------------------
+PERFORMANCE METRICS
+----------------------------------------
+  CPU Utilization (avg across pods):
+    Average: 0m
+    Maximum: m
+  
+  p95 Latency:
+    Average: 0ms
+    Maximum: ms
+
+----------------------------------------
+SCALING TRIGGER ANALYSIS
+----------------------------------------  Latency Trigger (>500ms): NO (max: ms)
+  CPU Trigger (>85%): NO (max: m)
+  
+  Scaling Responsiveness:
+    - No scale-up events detected     - Workload handled by  pods
+
+----------------------------------------
+RECOMMENDATIONS
+----------------------------------------  [OK] System stable - no scaling needed
+  [OK] Latency well below threshold (ms < 500ms)
+  [*] Consider increasing load or lowering latency threshold to test scaling
+  [*] CPU utilization low (m) - pods under-utilized
+  [*] Consider reducing resource requests for better efficiency
+
+----------------------------------------
+OUTPUT FILES
+----------------------------------------
+  Telemetry Data: .\scaling_test_results\test_20251111_120422\telemetry.csv
+  Locust Log: .\scaling_test_results\test_20251111_120422\locust_output.log
+  Summary: .\scaling_test_results\test_20251111_120422\test_summary.txt
+
+========================================

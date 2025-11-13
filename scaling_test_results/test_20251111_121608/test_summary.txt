@@ -1,0 +1,71 @@
+﻿========================================
+KEDA SCALING TEST SUMMARY
+========================================
+Test Configuration:
+  Users: 200
+  Spawn Rate: 15/s
+  Duration: 300s
+  Sample Interval: 15s
+  
+Test Execution:
+  Start Time: 2025-11-11 12:16:23
+  End Time: 2025-11-11 12:21:26
+  Samples Collected: 18
+
+----------------------------------------
+LOCUST LOAD TEST RESULTS
+----------------------------------------
+  Total Requests: N/A
+  Failures: N/A
+  Success Rate: N/A%
+  Requests/sec: N/A
+  
+  Latency:
+    Average: N/Ams
+    Median: N/Ams
+    Min: ms
+    Max: ms
+
+----------------------------------------
+SCALING BEHAVIOR
+----------------------------------------
+  Replica Count:
+    Initial: 3
+    Minimum: 3
+    Maximum: 10
+    Average: 7.4
+    Final: 10
+  
+  Time to First Scale-Up: 51s
+  Time to First Scale-Down: No scale-down
+
+----------------------------------------
+PERFORMANCE METRICS
+----------------------------------------
+  CPU Utilization (avg across pods):
+    Average: 448m
+    Maximum: 818m
+  
+  p95 Latency:
+    Average: 0ms
+    Maximum: 0ms
+
+----------------------------------------
+SCALING TRIGGER ANALYSIS
+----------------------------------------  Latency Trigger (>500ms): NO (max: 0ms)
+  CPU Trigger (>85%): NO (max: 818m)
+  
+  Scaling Responsiveness:
+    - Scale-up initiated at 51s     - Replicas increased: 3 â†’ 10
+
+----------------------------------------
+RECOMMENDATIONS
+----------------------------------------
+----------------------------------------
+OUTPUT FILES
+----------------------------------------
+  Telemetry Data: .\scaling_test_results\test_20251111_121608\telemetry.csv
+  Locust Log: .\scaling_test_results\test_20251111_121608\locust_output.log
+  Summary: .\scaling_test_results\test_20251111_121608\test_summary.txt
+
+========================================
