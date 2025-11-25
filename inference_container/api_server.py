@@ -97,6 +97,16 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _log_level() -> str:
+    """Get configured log level (info, debug, error). Default: info."""
+    return os.getenv("INFERENCE_LOG_LEVEL", "info").lower()
+
+
+def _should_log_debug() -> bool:
+    """Check if debug-level logs should be emitted."""
+    return _log_level() == "debug"
+
+
 # Legacy compatibility knobs (no longer used for concurrency now that inference is synchronous)
 _DEFAULT_CONCURRENCY = max(1, os.cpu_count() or 1)
 PREDICT_MAX_CONCURRENCY = max(1, _env_int("PREDICT_MAX_CONCURRENCY", _DEFAULT_CONCURRENCY))
@@ -497,23 +507,26 @@ def _prepare_dataframe_for_inference(
         if candidate not in df_tmp.columns:
             continue
         try:
-            # Log raw timestamp values for debugging
-            raw_values = df_tmp[candidate].head(5).tolist()
-            print(f"[TIMESTAMP_PARSE] Parsing column '{candidate}': sample={raw_values}")
-            trace_operation("before_to_datetime", func="_prepare_dataframe_for_inference", 
-                          candidate=candidate, raw_sample=raw_values, total_rows=len(df_tmp))
+            # Log raw timestamp values only in debug mode
+            if _should_log_debug():
+                raw_values = df_tmp[candidate].head(5).tolist()
+                print(f"[TIMESTAMP_PARSE] Parsing column '{candidate}': sample={raw_values}")
+                trace_operation("before_to_datetime", func="_prepare_dataframe_for_inference", 
+                              candidate=candidate, raw_sample=raw_values, total_rows=len(df_tmp))
             
             idx = pd.to_datetime(df_tmp[candidate], errors="coerce")
             
-            # Log parsed results
-            parsed_sample = idx.head(5).tolist()
-            unique_count = idx.nunique()
-            print(f"[TIMESTAMP_PARSE] Parsed result: unique={unique_count}/{len(idx)} sample={parsed_sample}")
-            trace_operation("after_to_datetime", func="_prepare_dataframe_for_inference",
-                          candidate=candidate, unique_count=int(unique_count), total=len(idx),
-                          parsed_sample=[str(ts) for ts in parsed_sample])
+            # Log parsed results only in debug mode
+            if _should_log_debug():
+                parsed_sample = idx.head(5).tolist()
+                unique_count = idx.nunique()
+                print(f"[TIMESTAMP_PARSE] Parsed result: unique={unique_count}/{len(idx)} sample={parsed_sample}")
+                trace_operation("after_to_datetime", func="_prepare_dataframe_for_inference",
+                              candidate=candidate, unique_count=int(unique_count), total=len(idx),
+                              parsed_sample=[str(ts) for ts in parsed_sample])
         except Exception as e:
-            print(f"[TIMESTAMP_PARSE] Failed to parse '{candidate}': {e}")
+            if _should_log_debug():
+                print(f"[TIMESTAMP_PARSE] Failed to parse '{candidate}': {e}")
             trace_error("_prepare_dataframe_for_inference", e, stage="to_datetime", candidate=candidate)
             continue
         if idx.isna().any():
@@ -810,19 +823,7 @@ async def predict(
     req_id = uuid.uuid4().hex[:8]
     wait_ms: Optional[float] = None
     
-    # DEBUG: Log what we received
-    if os.getenv("DEBUG_PAYLOAD_TRACE", "0") == "1":
-        print(f"[PREDICT_DEBUG] req_id={req_id}: req type={type(req)}", flush=True)
-        print(f"[PREDICT_DEBUG] req_id={req_id}: req is None? {req is None}", flush=True)
-        if req is not None:
-            print(f"[PREDICT_DEBUG] req_id={req_id}: has data attr? {hasattr(req, 'data')}", flush=True)
-            data_val = getattr(req, "data", "ATTR_MISSING")
-            print(f"[PREDICT_DEBUG] req_id={req_id}: data value type={type(data_val)}, is None={data_val is None}", flush=True)
-            if data_val and data_val != "ATTR_MISSING":
-                print(f"[PREDICT_DEBUG] req_id={req_id}: data keys={list(data_val.keys()) if isinstance(data_val, dict) else 'NOT_DICT'}", flush=True)
-                if isinstance(data_val, dict) and "timestamp" in data_val:
-                    ts_sample = data_val["timestamp"][:3] if isinstance(data_val.get("timestamp"), list) else "NOT_LIST"
-                    print(f"[PREDICT_DEBUG] req_id={req_id}: timestamp sample={ts_sample}", flush=True)
+    # DEBUG: Payload trace disabled by default (enable via INFERENCE_LOG_LEVEL=debug)
     try:
         if _cache_enabled() and ((req is None) or ((not getattr(req, "data", None)) and inference_length is None and getattr(req, "inference_length", None) is None)):
             inf_cached = _get_inferencer()
@@ -942,11 +943,19 @@ async def predict(
             _queue_log("predict_inline_no_inferencer", req_id=req_id)
             raise HTTPException(status_code=503, detail="Inference service not ready")
 
-        result_df = await asyncio.to_thread(
-            service.perform_inference,
-            df_for_inference,
-            inference_length=effective_inference_length,
-        )
+        # Phase-3: Use opportunistic batching coordinator if available
+        if hasattr(service, "coordinate_batch_inference"):
+            result_df = await asyncio.to_thread(
+                service.coordinate_batch_inference,
+                df_for_inference,
+                effective_inference_length,
+            )
+        else:
+            result_df = await asyncio.to_thread(
+                service.perform_inference,
+                df_for_inference,
+                inference_length=effective_inference_length,
+            )
         if result_df is None:
             with queue_metrics_lock:
                 queue_metrics["error_500_total"] += 1
@@ -1116,9 +1125,11 @@ async def _startup_event_nonblocking():  # pragma: no cover (startup side-effect
     try:
         if _PROMETHEUS_AVAILABLE:
             start_http_server(9091)
-            print("Started synchronous inference service | Metrics -> :9091", flush=True)
+            if _should_log_debug():
+                print("Started synchronous inference service | Metrics -> :9091", flush=True)
         else:
-            print("Started synchronous inference service | Metrics disabled (prometheus_client not installed)", flush=True)
+            if _should_log_debug():
+                print("Started synchronous inference service | Metrics disabled (prometheus_client not installed)", flush=True)
     except Exception:
         pass
 

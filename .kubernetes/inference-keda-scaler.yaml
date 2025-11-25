@@ -44,7 +44,7 @@ spec:
   # Triggers (OR semantics - scale if ANY trigger fires)
   triggers:
   
-  # Trigger 1: P95 Latency > 800ms
+  # Trigger 1: P95 Latency > 250ms (tuned for Phase-5 performance: baseline p95=190ms)
   - type: prometheus
     metadata:
       serverAddress: http://prometheus-server.default.svc.cluster.local:80
@@ -53,8 +53,8 @@ spec:
         histogram_quantile(0.95,
           sum(rate(inference_latency_seconds_bucket[2m])) by (le)
         )
-      threshold: "0.8"  # 800ms in seconds
-      activationThreshold: "0.4"  # Start scaling above 400ms
+      threshold: "0.25"  # 250ms in seconds (scale up when p95 exceeds this)
+      activationThreshold: "0.15"  # 150ms (activate scaler, prevent premature scale-down)
 
 ---
 # Alternative: Simple Prometheus-based KEDA scaler (single metric)

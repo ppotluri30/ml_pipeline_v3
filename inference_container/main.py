@@ -1,4 +1,14 @@
 # predict_container/main.py
+import os
+
+def _log_level() -> str:
+    """Get configured log level (info, debug, error). Default: info."""
+    return os.getenv("INFERENCE_LOG_LEVEL", "info").lower()
+
+def _should_log_debug() -> bool:
+    """Check if debug-level logs should be emitted."""
+    return _log_level() == "debug"
+
 from client_utils import get_file, post_file
 from data_utils import strip_timezones
 from kafka_utils import (
@@ -177,8 +187,7 @@ def _ensure_buckets():
                     print(json.dumps({"service": "inference", "event": "bucket_created", "bucket": b}), flush=True)
                 except Exception as ce:  # noqa: BLE001
                     print(json.dumps({"service": "inference", "event": "bucket_create_fail", "bucket": b, "error": str(ce)}), flush=True)
-            else:
-                print(json.dumps({"service": "inference", "event": "bucket_exists", "bucket": b}), flush=True)
+            # Suppress bucket_exists logs (too verbose)
     except Exception as e:  # noqa: BLE001
         print(f"Bucket ensure error (inference): {e}")
 
@@ -258,7 +267,6 @@ def message_handler(service: Inferencer, message_queue: queue.Queue):
     Worker thread function that processes messages from the queue.
     It dispatches tasks based on the message source (training or preprocessing).
     """
-    print("Inference worker thread started. Waiting for messages in queue...")
     ENABLE_TTL = os.environ.get("ENABLE_TTL", "false").lower() in {"1","true","yes"}
     ENABLE_MICROBATCH = os.environ.get("ENABLE_MICROBATCH", "false").lower() in {"1","true","yes"}
     BATCH_SIZE = int(os.environ.get("BATCH_SIZE", "32"))
@@ -292,7 +300,8 @@ def message_handler(service: Inferencer, message_queue: queue.Queue):
                 partition = queue_item.get("partition")
                 offset = queue_item.get("offset")
 
-                print(f"Inference worker received message from {source} queue with key: {message.key}")
+                if _should_log_debug():
+                    print(f"Inference worker received message from {source} queue with key: {message.key}")
 
                 # TTL handling via Kafka headers
                 if ENABLE_TTL:
@@ -401,7 +410,8 @@ def message_handler(service: Inferencer, message_queue: queue.Queue):
                     operation = claim_check.get("operation")  # Optional
 
                     if bucket and object_key:
-                        print(f"Inference worker fetching data from object store: s3://{bucket}/{object_key}")
+                        if _should_log_debug():
+                            print(f"Inference worker fetching data from object store: s3://{bucket}/{object_key}")
                         try:
                             parquet_bytes = get_file(service.gateway_url, bucket, object_key)
                             table = pq.read_table(source=parquet_bytes)
@@ -498,7 +508,8 @@ def message_handler(service: Inferencer, message_queue: queue.Queue):
                     run_id = claim_check.get("run_id")
                     model_uri = claim_check.get("model_uri")
                     model_type = claim_check.get("model_type")
-                    print(f"Promotion message received for run_id={run_id}, model_type={model_type}")
+                    if _should_log_debug():
+                        print(f"Promotion message received for run_id={run_id}, model_type={model_type}")
                     try:
                         if model_uri and run_id:
                             from mlflow import pyfunc
@@ -512,12 +523,14 @@ def message_handler(service: Inferencer, message_queue: queue.Queue):
                         loaded = False
                         for cand in uri_candidates:
                             try:
-                                print(f"Loading promoted model via URI: {cand}")
+                                if _should_log_debug():
+                                    print(f"Loading promoted model via URI: {cand}")
                                 promoted_model = pyfunc.load_model(cand)
                                 # Phase-1: Apply JIT compilation if PyTorch model
                                 from inferencer import apply_jit_compilation
                                 apply_jit_compilation(promoted_model, service.model_class, run_id, model_type or '')
                                 service.current_model = promoted_model
+                                
                                 # Update core identity metadata BEFORE enrichment so logs reflect correct model_type
                                 service.current_run_id = run_id  # critical: previously missing caused stale run_id usage
                                 # Capture config hash if provided
@@ -539,7 +552,8 @@ def message_handler(service: Inferencer, message_queue: queue.Queue):
                                     "model_type": service.model_type,
                                     "experiment": service.current_experiment_name,
                                 })
-                                print(f"✅ Promoted model loaded from {cand}")
+                                if _should_log_debug():
+                                    print(f"Promoted model loaded from {cand}")
                                 loaded = True
                                 break
                             except Exception as le:  # noqa: BLE001
@@ -552,6 +566,15 @@ def message_handler(service: Inferencer, message_queue: queue.Queue):
                         if run_id:
                             # Pass currently set service.model_type so enrichment does not re-use stale value
                             _enrich_loaded_model(service, run_id, service.model_type or model_type)
+                        
+                        # Phase-4: Convert to ONNX Runtime after enrichment (needs model_type and input_seq_len)
+                        from inferencer import _ENABLE_ONNX
+                        import json
+                        print(json.dumps({"service": "inference", "event": "onnx_conversion_checkpoint", "enable_flag": _ENABLE_ONNX, "has_model": service.current_model is not None, "has_impl": hasattr(service.current_model, "_model_impl") if service.current_model else False}))
+                        if _ENABLE_ONNX and service.current_model is not None and hasattr(service.current_model, "_model_impl"):
+                            print(json.dumps({"service": "inference", "event": "calling_onnx_conversion", "run_id": run_id}))
+                            service._convert_to_onnx(service.current_model, run_id)
+                        
                         if service.current_model is not None and service.df is not None:
                             service.perform_inference(service.get_df_copy())
                         else:
@@ -650,7 +673,8 @@ def _preload_test_dataframe(service: Inferencer):
         
         service.df = df
         print({"service": "inference", "event": "preload_test_success", "rows": int(len(service.df.index)), "cols": int(len(service.df.columns)), "object_key": test_key})
-        print(f"[DEBUG] Preload: First 5 index values: {service.df.index[:5].tolist()}, Unique: {service.df.index.nunique()}")
+        if _should_log_debug():
+            print(f"[DEBUG] Preload: First 5 index values: {service.df.index[:5].tolist()}, Unique: {service.df.index.nunique()}")
     except Exception as e:  # noqa: BLE001
         print({"service": "inference", "event": "preload_test_fail", "error": str(e)})
 
@@ -685,7 +709,8 @@ def _attempt_load_promoted(service: Inferencer):
                 ok, payload, mode = _extract_json_from_raw(raw)
                 if ok and isinstance(payload, dict):
                     loaded_payload = payload
-                    print({"service": "inference", "event": "promotion_manifest_found", "object_key": key, "config_hash": payload.get("config_hash"), "parse_mode": mode})
+                    if _should_log_debug():
+                        print({"service": "inference", "event": "promotion_manifest_found", "object_key": key, "config_hash": payload.get("config_hash"), "parse_mode": mode})
                     print({"service": "inference", "event": "promotion_pointer_parsed", "run_id": payload.get('run_id'), "model_type": payload.get('model_type'), "config_hash": payload.get('config_hash')})
                     break
                 else:
@@ -712,7 +737,8 @@ def _attempt_load_promoted(service: Inferencer):
             uri_candidates.append(model_uri.rstrip('/') + '/model')
         for cand in uri_candidates:
             try:
-                print(f"Loading promoted model at startup via URI: {cand}")
+                if _should_log_debug():
+                    print(f"Loading promoted model at startup via URI: {cand}")
                 service.current_model = pyfunc.load_model(cand)
                 service.current_run_name = model_type or ''
                 service.current_experiment_name = experiment
@@ -725,6 +751,11 @@ def _attempt_load_promoted(service: Inferencer):
                 apply_jit_compilation(service.current_model, service.model_class, run_id, model_type or '')
                 if run_id:
                     _enrich_loaded_model(service, run_id, model_type)
+                
+                # Phase-4: Convert to ONNX Runtime after enrichment (STARTUP PATH)
+                from inferencer import _ENABLE_ONNX
+                if _ENABLE_ONNX and service.current_model is not None and hasattr(service.current_model, "_model_impl"):
+                    service._convert_to_onnx(service.current_model, run_id)
                 break
             except Exception as le:  # noqa: BLE001
                 print({"service": "inference", "event": "promotion_model_load_fail_startup", "candidate": cand, "error": str(le)})
@@ -838,6 +869,11 @@ def _load_promoted_pointer(service: Inferencer):
             print({"service": "inference", "event": "promotion_model_loaded_startup", "model_uri": cand, "run_id": run_id, "config_hash": cfg_hash})
             if run_id:
                 _enrich_loaded_model(service, run_id, model_type)
+            
+            # Phase-4: Convert to ONNX Runtime after enrichment (SECOND STARTUP PATH)
+            from inferencer import _ENABLE_ONNX
+            if _ENABLE_ONNX and service.current_model is not None and hasattr(service.current_model, "_model_impl"):
+                service._convert_to_onnx(service.current_model, run_id)
             break
         except Exception as le:  # noqa: BLE001
             print({"service": "inference", "event": "promotion_model_load_fail_startup", "candidate": cand, "error": str(le)})
@@ -975,13 +1011,16 @@ def _start_runtime():
 
     # Start consumers with the new loop (training, preprocessing, promotion)
     threading.Thread(target=_consumer_loop, args=(TRAINING_TOPIC, "training"), daemon=True).start()
-    print(f"Started Kafka consumer for training topic: {TRAINING_TOPIC}")
+    if _should_log_debug():
+        print(f"Started Kafka consumer for training topic: {TRAINING_TOPIC}")
 
     threading.Thread(target=_consumer_loop, args=(PREPROCESSING_TOPIC, "preprocessing"), daemon=True).start()
-    print(f"Started Kafka consumer for preprocessing topic: {PREPROCESSING_TOPIC}")
+    if _should_log_debug():
+        print(f"Started Kafka consumer for preprocessing topic: {PREPROCESSING_TOPIC}")
 
     threading.Thread(target=_consumer_loop, args=(PROMOTION_TOPIC, "promotion"), daemon=True).start()
-    print(f"Started Kafka consumer for promotion topic: {PROMOTION_TOPIC}")
+    if _should_log_debug():
+        print(f"Started Kafka consumer for promotion topic: {PROMOTION_TOPIC}")
 
 
 def _graceful_shutdown():
@@ -995,7 +1034,8 @@ def _graceful_shutdown():
         if producer:
             producer.close()
     finally:
-        print("Kafka consumers and producer closed.")
+        if _should_log_debug():
+            print("Kafka consumers and producer closed.")
 
 
 # Do NOT start runtime automatically at import time. Runtime is started by
@@ -1011,12 +1051,14 @@ def start_runtime_safe():
 if __name__ == "__main__":
     # When executed as a script, keep process alive.
     try:
-        print({"service": "inference", "event": "main_loop_enter"})
+        if _should_log_debug():
+            print({"service": "inference", "event": "main_loop_enter"})
         # Start runtime when running as the main process (local debug)
         start_runtime_safe()
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
+        # Keep at info level
         print("Inference container stopped by user.")
     finally:
         _graceful_shutdown()

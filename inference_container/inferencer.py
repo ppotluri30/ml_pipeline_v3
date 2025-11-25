@@ -5,6 +5,14 @@ os.environ["MKL_NUM_THREADS"] = "1"
 os.environ["OPENBLAS_NUM_THREADS"] = "1"
 os.environ["NUMEXPR_NUM_THREADS"] = "1"
 
+def _log_level() -> str:
+    """Get configured log level (info, debug, error). Default: info."""
+    return os.getenv("INFERENCE_LOG_LEVEL", "info").lower()
+
+def _should_log_debug() -> bool:
+    """Check if debug-level logs should be emitted."""
+    return _log_level() == "debug"
+
 from client_utils import post_file
 from data_utils import window_data, check_uniform, time_to_feature, subset_scaler, _fix_zero_scale
 from kafka_utils import produce_message, publish_error
@@ -19,7 +27,8 @@ import asyncio
 import logging
 import threading
 import time
-from typing import Tuple, Optional, Union, Dict
+from concurrent.futures import ThreadPoolExecutor
+from typing import Tuple, Optional, Union, Dict, List
 from sklearn.preprocessing import MinMaxScaler, StandardScaler, RobustScaler, MaxAbsScaler
 
 # Phase-1 Optimization: Apply torch thread limits
@@ -30,6 +39,25 @@ try:
     print({"service": "inference", "event": "thread_tuning_applied", "omp": 1, "mkl": 1, "torch_threads": 1})
 except ImportError:
     pass
+
+# Phase-2 Optimization: Shared async executor for logging (removes MinIO/Kafka from hot path)
+_ASYNC_LOG_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="async-log")
+
+# Phase-2 Optimization: Enable/disable features via env vars
+_ENABLE_QUANTIZATION = os.environ.get("INFERENCE_ENABLE_QUANTIZATION", "0").lower() in {"1", "true", "yes"}
+_ENABLE_ONNX = os.environ.get("INFERENCE_ENABLE_ONNX", "1").lower() in {"1", "true", "yes"}
+
+if _should_log_debug():
+    print({"service": "inference", "event": "phase2_optimization_config", "quantization_enabled": _ENABLE_QUANTIZATION, "onnx_enabled": _ENABLE_ONNX})
+
+# Phase-3 Optimization: Zero-queue opportunistic batching (no buffering, no waiting)
+_ENABLE_OPPORTUNISTIC_BATCHING = os.environ.get("ENABLE_OPPORTUNISTIC_BATCHING", "1").lower() in {"1", "true", "yes"}
+_BATCH_COORDINATOR_LOCK = threading.Lock()
+_PENDING_BATCH: List[Tuple[pd.DataFrame, int, threading.Event, dict]] = []  # [(df, inf_len, event, result_container)]
+_BATCH_PROCESSING = False
+
+if _should_log_debug():
+    print({"service": "inference", "event": "phase3_optimization_config", "opportunistic_batching_enabled": _ENABLE_OPPORTUNISTIC_BATCHING})
 
 # Constants - These should all be defined by the service later
 TIME_FEATURES = ["min_of_day", "day_of_week", "day_of_year"]
@@ -56,7 +84,8 @@ def apply_jit_compilation(model, model_class: str, run_id: str, model_type: str)
     Safe to call multiple times - will skip if not PyTorch or already compiled.
     Auto-detects PyTorch models if model_class not yet set.
     """
-    print({"service": "inference", "event": "jit_check_start", "run_id": run_id, "model_type": model_type, "has_impl": hasattr(model, "_model_impl")})
+    if _should_log_debug():
+        print({"service": "inference", "event": "jit_check_start", "run_id": run_id, "model_type": model_type, "has_impl": hasattr(model, "_model_impl")})
     if not hasattr(model, "_model_impl"):
         return
     
@@ -82,13 +111,15 @@ def apply_jit_compilation(model, model_class: str, run_id: str, model_type: str)
         
         # Auto-detect if PyTorch model (check if has nn.Module methods)
         is_pytorch = hasattr(inner_model, "eval") and hasattr(inner_model, "parameters")
-        print({"service": "inference", "event": "jit_pytorch_detection", "run_id": run_id, "is_pytorch": is_pytorch, "has_eval": hasattr(inner_model, "eval"), "has_parameters": hasattr(inner_model, "parameters")})
+        if _should_log_debug():
+            print({"service": "inference", "event": "jit_pytorch_detection", "run_id": run_id, "is_pytorch": is_pytorch, "has_eval": hasattr(inner_model, "eval"), "has_parameters": hasattr(inner_model, "parameters")})
         if not is_pytorch:
             return
         
         # Check if already JIT-compiled
         if isinstance(inner_model, torch.jit.ScriptModule):
-            print({"service": "inference", "event": "jit_already_compiled", "run_id": run_id, "model_type": model_type})
+            if _should_log_debug():
+                print({"service": "inference", "event": "jit_already_compiled", "run_id": run_id, "model_type": model_type})
             return
         
         # Apply JIT compilation
@@ -102,6 +133,7 @@ def apply_jit_compilation(model, model_class: str, run_id: str, model_type: str)
                 model._model_impl.python_model.model = jit_model
             elif hasattr(model._model_impl, "model"):
                 model._model_impl.model = jit_model
+            # Keep JIT success at info level
             print({"service": "inference", "event": "jit_compiled", "run_id": run_id, "model_type": model_type})
         except Exception as jit_err:
             print({"service": "inference", "event": "jit_compile_failed", "run_id": run_id, "model_type": model_type, "error": str(jit_err)})
@@ -152,6 +184,12 @@ class Inferencer:
         self._scaler_checked_run_ids = set()
         self.simulate_delay_secs = SIMULATE_DELAY_SECS
         self._last_inference_timings = None
+        # Phase-2 Optimization: Track quantization and ONNX status
+        self.quantization_applied = False
+        self.onnx_model = None
+        self.onnx_session = None
+        self.onnx_cache_path = None  # Phase-4: Persistent ONNX cache
+        self.model_backend = "pytorch"  # Phase-4: Track active backend (pytorch/onnx)
         logger.info("SIMULATE_DELAY_SECS=%s", self.simulate_delay_secs)
 
     # ----------------- Thread-safe helpers for shared state -----------------
@@ -199,8 +237,115 @@ class Inferencer:
         logger.info("Simulating inference delay: %ss", delay)
         await asyncio.sleep(delay)
 
+    # Phase-3 Optimization: Zero-queue opportunistic batching
+    def coordinate_batch_inference(self, df: pd.DataFrame, inference_length: int) -> Optional[pd.DataFrame]:
+        """Coordinate opportunistic batching with zero wait time.
+        
+        Only batches requests that arrive in the same event-loop tick.
+        If no other requests are pending, executes immediately without batching.
+        
+        Returns:
+            Result DataFrame or None if batching is in progress (will be filled by batch leader)
+        """
+        global _BATCH_COORDINATOR_LOCK, _PENDING_BATCH, _BATCH_PROCESSING
+        
+        if not _ENABLE_OPPORTUNISTIC_BATCHING:
+            # Batching disabled, execute normally
+            return self.perform_inference(df, inference_length=inference_length)
+        
+        result_container = {}
+        event = threading.Event()
+        
+        with _BATCH_COORDINATOR_LOCK:
+            # Add this request to pending batch
+            _PENDING_BATCH.append((df, inference_length, event, result_container))
+            
+            if _BATCH_PROCESSING:
+                # Another request is already processing batch, wait for it
+                batch_id = f"batch-wait-{threading.current_thread().ident}"
+                print({"service": "inference", "event": "opportunistic_batch_join", "batch_id": batch_id, "pending_count": len(_PENDING_BATCH)}, flush=True)
+            else:
+                # We're the first request, become batch leader
+                _BATCH_PROCESSING = True
+                batch_id = f"batch-lead-{threading.current_thread().ident}"
+                
+                # Immediately snapshot pending requests (zero wait time)
+                batch_snapshot = _PENDING_BATCH[:]
+                _PENDING_BATCH.clear()
+                
+                batch_size = len(batch_snapshot)
+                print({"service": "inference", "event": "opportunistic_batch_execute", "batch_id": batch_id, "batch_size": batch_size}, flush=True)
+                
+                # Release lock before inference (don't block other requests)
+                _BATCH_COORDINATOR_LOCK.release()
+                
+                try:
+                    if batch_size == 1:
+                        # Only one request, execute normally (no batching overhead)
+                        single_df, single_len, single_event, single_result = batch_snapshot[0]
+                        result = self.perform_inference(single_df, inference_length=single_len)
+                        single_result['df'] = result
+                        single_event.set()
+                        print({"service": "inference", "event": "opportunistic_batch_single", "batch_id": batch_id}, flush=True)
+                        return result
+                    
+                    # Multiple requests: batch them
+                    # Concatenate DataFrames (preserving individual request boundaries)
+                    batch_dfs = []
+                    batch_lens = []
+                    for req_df, req_len, _, _ in batch_snapshot:
+                        batch_dfs.append(req_df)
+                        batch_lens.append((len(req_df), req_len))
+                    
+                    # Stack DataFrames into single batch
+                    combined_df = pd.concat(batch_dfs, axis=0, ignore_index=False)
+                    max_inference_len = max(req_len for _, req_len in batch_lens)
+                    
+                    print({"service": "inference", "event": "opportunistic_batch_combined", 
+                           "batch_id": batch_id, "total_rows": len(combined_df), 
+                           "max_inference_len": max_inference_len}, flush=True)
+                    
+                    # Execute batched inference
+                    batch_result = self.perform_inference(combined_df, inference_length=max_inference_len)
+                    
+                    # Split results back to individual requests
+                    if batch_result is not None:
+                        current_idx = 0
+                        for i, ((req_rows, req_len), (_, _, req_event, req_result)) in enumerate(zip(batch_lens, batch_snapshot)):
+                            # Extract rows belonging to this request
+                            individual_result = batch_result.iloc[current_idx:current_idx + req_rows].copy()
+                            req_result['df'] = individual_result
+                            req_event.set()
+                            current_idx += req_rows
+                    else:
+                        # Inference failed, signal all requests with None
+                        for _, _, req_event, req_result in batch_snapshot:
+                            req_result['df'] = None
+                            req_event.set()
+                    
+                    print({"service": "inference", "event": "opportunistic_batch_complete", 
+                           "batch_id": batch_id, "batch_size": batch_size}, flush=True)
+                    
+                    # Return our own result
+                    return result_container.get('df')
+                    
+                finally:
+                    # Re-acquire lock to reset processing flag
+                    _BATCH_COORDINATOR_LOCK.acquire()
+                    _BATCH_PROCESSING = False
+        
+        # We joined an existing batch, wait for results
+        event.wait(timeout=30)  # 30s timeout to prevent deadlock
+        result = result_container.get('df')
+        
+        if result is None:
+            print({"service": "inference", "event": "opportunistic_batch_timeout", "batch_id": batch_id}, flush=True)
+        
+        return result
+
     def load_model(self, experiment_name: str, run_name: str, sort: str="Recent"):
-        print(f"[Inferencer:{INFER_VERSION}] Attempting to load model for experiment: {experiment_name}, run: {run_name}")
+        if _should_log_debug():
+            print(f"[Inferencer:{INFER_VERSION}] Attempting to load model for experiment: {experiment_name}, run: {run_name}")
 
         try:
             if sort == "Recent":
@@ -232,12 +377,14 @@ class Inferencer:
                     param_name = col.replace("params.", "")
                     self.params[param_name] = run_row[col]
             
-            print(f"Extracted parameters: {self.params}")
+            if _should_log_debug():
+                print(f"Extracted parameters: {self.params}")
             
             # Detect model type from experiment name or parameters
             self.model_type, self.model_class = self._detect_model_type(runs_df.iloc[0])
             
-            print(f"Found run with ID: {run_id}, Model type: {self.model_type}, Model class: {self.model_class}")
+            if _should_log_debug():
+                print(f"Found run with ID: {run_id}, Model type: {self.model_type}, Model class: {self.model_class}")
 
             if self.model_class == "pytorch":
                 self.input_seq_len = int(runs_df["params.input_sequence_length"][0])
@@ -278,9 +425,32 @@ class Inferencer:
                         except Exception as jit_outer_err:
                             print({"service": "inference", "event": "jit_setup_failed", "run_id": run_id, "error": str(jit_outer_err)})
                     
+                    # Phase-2 Optimization: Apply dynamic quantization (INT8)
+                    if self.model_class == "pytorch" and _ENABLE_QUANTIZATION and hasattr(model, "_model_impl"):
+                        self._apply_quantization(model, run_id)
+                    
+                    # Phase-2 Optimization: Convert to ONNX Runtime if enabled
+                    if self.model_class == "pytorch" and _ENABLE_ONNX and hasattr(model, "_model_impl"):
+                        self._convert_to_onnx(model, run_id)
+                    
+                    # Phase-4: Log backend selection
+                    backend_info = {
+                        "service": "inference",
+                        "event": "model_backend_selected",
+                        "run_id": run_id,
+                        "model_type": self.model_type,
+                        "model_class": self.model_class,
+                        "backend": self.model_backend,
+                        "quantization_applied": self.quantization_applied,
+                        "onnx_enabled": self.onnx_session is not None
+                    }
+                    # Keep backend info at info level
+                    print(backend_info)
+                    
                     self.current_experiment_name = experiment_name
                     self.current_run_name = run_name
-                    print(f"✅ Model loaded successfully from subpath '{subpath}'.")
+                    if _should_log_debug():
+                        print(f"Model loaded successfully from subpath '{subpath}'.")
                     break
                 except Exception as e:  # noqa: BLE001
                     print(f"Model load attempt failed for subpath '{subpath}': {e}")
@@ -303,7 +473,8 @@ class Inferencer:
             # 2. Any *.pkl at artifact root with 'scaler' in its name
             # Avoid repeated warnings by caching run_ids we've inspected.
             if run_id in self._scaler_checked_run_ids and self.current_scaler is None:
-                print("[Info] Skipping scaler search (previously not found for this run).")
+                if _should_log_debug():
+                    print("[Info] Skipping scaler search (previously not found for this run).")
             elif self.current_scaler is not None and run_id in self._scaler_checked_run_ids:
                 # Already loaded earlier; nothing to do
                 pass
@@ -387,6 +558,148 @@ class Inferencer:
                 {"experiment": experiment_name, "run_name": run_name}
             )
 
+    def _apply_quantization(self, model, run_id: str) -> None:
+        """Phase-2: Apply dynamic INT8 quantization with safe fallback."""
+        try:
+            import torch
+            wrapped_model = getattr(model._model_impl, "python_model", None)
+            if wrapped_model is None or not hasattr(wrapped_model, "model"):
+                print({"service": "inference", "event": "quantization_skip_no_model", "run_id": run_id})
+                return
+            
+            inner_model = wrapped_model.model
+            if not hasattr(inner_model, "eval"):
+                print({"service": "inference", "event": "quantization_skip_not_pytorch", "run_id": run_id})
+                return
+            
+            inner_model.eval()
+            # Apply dynamic quantization to Linear and LSTM/GRU layers
+            quantized_model = torch.quantization.quantize_dynamic(
+                inner_model,
+                {torch.nn.Linear, torch.nn.LSTM, torch.nn.GRU},
+                dtype=torch.qint8
+            )
+            wrapped_model.model = quantized_model
+            self.quantization_applied = True
+            print({"service": "inference", "event": "quantization_applied", "run_id": run_id, "model_type": self.model_type, "dtype": "qint8"})
+        except Exception as quant_err:
+            self.quantization_applied = False
+            print({"service": "inference", "event": "quantization_failed_fallback", "run_id": run_id, "error": str(quant_err)})
+    
+    def _convert_to_onnx(self, model, run_id: str) -> None:
+        """Phase-4: Convert PyTorch model to ONNX Runtime with persistent cache."""
+        try:
+            import torch
+            import tempfile
+            import hashlib
+            
+            # Try importing onnxruntime and onnx
+            try:
+                import onnxruntime as ort
+                import onnx
+            except ImportError:
+                print({"service": "inference", "event": "onnx_skip_not_installed", "run_id": run_id})
+                return
+            
+            # Extract PyTorch model - try all paths like JIT compilation does
+            inner_model = None
+            
+            # Path 1: model._model_impl.pytorch_model (MLflow PyTorch flavor)
+            if hasattr(model._model_impl, "pytorch_model"):
+                inner_model = model._model_impl.pytorch_model
+            # Path 2: model._model_impl.python_model.model (custom wrapper)
+            elif hasattr(model._model_impl, "python_model") and hasattr(model._model_impl.python_model, "model"):
+                inner_model = model._model_impl.python_model.model
+            # Path 3: Direct access
+            elif hasattr(model._model_impl, "model"):
+                inner_model = model._model_impl.model
+            
+            if inner_model is None or not hasattr(inner_model, "eval"):
+                print({"service": "inference", "event": "onnx_skip_no_pytorch_model", "run_id": run_id})
+                return
+            
+            inner_model.eval()
+            
+            # Create cache path based on run_id and model structure
+            cache_dir = os.path.join(tempfile.gettempdir(), "onnx_cache")
+            os.makedirs(cache_dir, exist_ok=True)
+            
+            # Generate deterministic cache key from model structure
+            model_str = str(inner_model)
+            cache_key = hashlib.md5(f"{run_id}_{model_str}".encode()).hexdigest()[:16]
+            onnx_cache_path = os.path.join(cache_dir, f"{cache_key}.onnx")
+            
+            # Check if ONNX model already exists and is valid
+            if os.path.exists(onnx_cache_path):
+                try:
+                    # Validate cached ONNX model
+                    onnx_model = onnx.load(onnx_cache_path)
+                    onnx.checker.check_model(onnx_model)
+                    
+                    # Load into ONNX Runtime
+                    sess_options = ort.SessionOptions()
+                    sess_options.intra_op_num_threads = 1
+                    sess_options.inter_op_num_threads = 1
+                    self.onnx_session = ort.InferenceSession(onnx_cache_path, sess_options)
+                    self.onnx_cache_path = onnx_cache_path
+                    self.model_backend = "onnx"
+                    
+                    print({"service": "inference", "event": "onnx_loaded_from_cache", "run_id": run_id, "cache_path": onnx_cache_path})
+                    return
+                except Exception as cache_err:
+                    print({"service": "inference", "event": "onnx_cache_invalid_regenerating", "run_id": run_id, "error": str(cache_err)[:200]})
+                    try:
+                        os.unlink(onnx_cache_path)
+                    except Exception:
+                        pass
+            
+            # Create dummy input for export (batch=1, seq_len from params, features from model)
+            input_seq_len = self.input_seq_len or 10
+            # Infer feature count from model's first layer if possible
+            feature_dim = 1
+            try:
+                if hasattr(inner_model, "lstm") and hasattr(inner_model.lstm, "input_size"):
+                    feature_dim = inner_model.lstm.input_size
+                elif hasattr(inner_model, "gru") and hasattr(inner_model.gru, "input_size"):
+                    feature_dim = inner_model.gru.input_size
+                elif hasattr(inner_model, "rnn") and hasattr(inner_model.rnn, "input_size"):
+                    feature_dim = inner_model.rnn.input_size
+            except Exception:
+                pass
+            
+            dummy_input = torch.randn(1, input_seq_len, feature_dim)
+            
+            # Export to ONNX with persistent cache
+            torch.onnx.export(
+                inner_model,
+                dummy_input,
+                onnx_cache_path,
+                export_params=True,
+                opset_version=14,
+                do_constant_folding=True,
+                input_names=["input"],
+                output_names=["output"],
+                dynamic_axes={"input": {0: "batch", 1: "seq_len"}, "output": {0: "batch", 1: "seq_len"}}
+            )
+            
+            # Validate exported ONNX model
+            onnx_model = onnx.load(onnx_cache_path)
+            onnx.checker.check_model(onnx_model)
+            
+            # Load into ONNX Runtime
+            sess_options = ort.SessionOptions()
+            sess_options.intra_op_num_threads = 1
+            sess_options.inter_op_num_threads = 1
+            self.onnx_session = ort.InferenceSession(onnx_cache_path, sess_options)
+            self.onnx_cache_path = onnx_cache_path
+            self.model_backend = "onnx"
+            
+            print({"service": "inference", "event": "onnx_export_success", "run_id": run_id, "model_type": self.model_type, "input_shape": [1, input_seq_len, feature_dim], "cache_path": onnx_cache_path})
+        except Exception as onnx_err:
+            self.onnx_session = None
+            self.model_backend = "pytorch"
+            print({"service": "inference", "event": "onnx_export_failed_fallback", "run_id": run_id, "error": str(onnx_err)[:500]})
+    
     def _detect_model_type(self, run_row: pd.Series) -> Tuple[str, str]:
         """Detect [model_type, model_class] from MLflow run parameters or tags."""
 
@@ -459,7 +772,8 @@ class Inferencer:
         if df_eval is None:
             if self.df is None:
                 trace_error("perform_inference", ValueError("No data"), message="No data provided for inference and service dataframe is empty")
-                print("No data provided for inference and service dataframe is empty.")
+                if _should_log_debug():
+                    print("No data provided for inference and service dataframe is empty.")
                 return None
             # CRITICAL: Deep copy shared DataFrame to prevent concurrent modification
             df_eval = self.df.copy(deep=True)
@@ -468,14 +782,14 @@ class Inferencer:
             trace_dataframe("perform_inference_entry", df_eval, {"source": "request_override"}, "perform_inference")
             if os.getenv("INFER_VERBOSE_DATA", "0") in {"1","true","TRUE"}:
                 try:
-                    print("Raw data")
-                    print(df_eval.head(3))
-                    print(df_eval.tail(3))
+                    # Disable verbose data dumps
+                    pass
                 except Exception:
                     pass
         if self.current_model is None:
             trace_operation("no_model_loaded", action="defer_inference")
-            print("[INFO] Model not loaded yet. Deferring inference (no DLQ).")
+            if _should_log_debug():
+                print("[INFO] Model not loaded yet. Deferring inference (no DLQ).")
             return None
         local_inference_length = int(inference_length) if inference_length is not None else INFERENCE_LENGTH
         self._mark_job_started()
@@ -507,7 +821,8 @@ class Inferencer:
                 return None
             required_index = SAMPLE_IDX + self.input_seq_len
             if total_rows == 0:
-                print("[Inferencer] Empty dataframe passed to inference; aborting.")
+                if _should_log_debug():
+                    print("[Inferencer] Empty dataframe passed to inference; aborting.")
                 _finalize_timings()
                 return None
             if required_index >= total_rows:
@@ -527,12 +842,14 @@ class Inferencer:
 
             timings["precheck_ms"] = (time.perf_counter() - overall_start) * 1000.0
 
+            # Phase-5: Start preprocessing timing
+            timings["preprocessing_start"] = time.perf_counter()
+            
             stage_start = time.perf_counter()
             # Diagnostic: Log first few timestamps to debug zero timedelta
             if len(df_eval.index) > 0:
-                print(f"[DEBUG] req_id={timings.get('req_id', 'unknown')}: df_eval has {len(df_eval)} rows")
-                print(f"[DEBUG] First 5 timestamps: {df_eval.index[:5].tolist()}")
-                print(f"[DEBUG] Unique timestamps: {df_eval.index.nunique()}")
+                # Debug dumps disabled (enable via INFERENCE_LOG_LEVEL=debug)
+                pass
             timedelta = check_uniform(df_eval)
             timings["check_uniform_ms"] = (time.perf_counter() - stage_start) * 1000.0
 
@@ -577,6 +894,7 @@ class Inferencer:
                 
                 numpy_duration_ms = (time.perf_counter() - stage_start) * 1000.0
                 timings["prepare_prediction_frame_ms"] = numpy_duration_ms
+                timings["feature_engineering_ms"] = numpy_duration_ms  # Phase-5: Also track as feature engineering
                 timings["feature_engineering_method"] = "numpy_optimized"
                 
                 print({
@@ -598,10 +916,18 @@ class Inferencer:
                     ),
                     columns=df_eval.columns
                 )
+                
+                # Phase-5: Time the fallback feature engineering
+                fe_fallback_start = time.perf_counter()
                 df_predictions = time_to_feature(df_predictions)
                 timings["prepare_prediction_frame_ms"] = (time.perf_counter() - stage_start) * 1000.0
+                timings["feature_engineering_ms"] = (time.perf_counter() - fe_fallback_start) * 1000.0
                 timings["feature_engineering_method"] = "pandas_fallback"
 
+            # Phase-5: Calculate total preprocessing time
+            if "preprocessing_start" in timings:
+                timings["preprocessing_total_ms"] = (time.perf_counter() - timings["preprocessing_start"]) * 1000.0
+            
             branch_start = time.perf_counter()
             if self.model_class == "pytorch":
                 df_transformed_predictions = self._perform_pytorch_inference(df_eval, df_predictions, local_inference_length, timings)
@@ -614,8 +940,10 @@ class Inferencer:
             timings["model_branch_ms"] = (time.perf_counter() - branch_start) * 1000.0
 
             save_start = time.perf_counter()
-            self._save_and_publish_predictions(df_transformed_predictions, df_eval, timings)
+            # Phase-2: Execute logging asynchronously (removes MinIO/Kafka from hot path)
+            _ASYNC_LOG_EXECUTOR.submit(self._save_and_publish_predictions, df_transformed_predictions, df_eval, timings)
             timings["save_publish_ms"] = (time.perf_counter() - save_start) * 1000.0
+            timings["async_logging_used"] = 1.0
 
             _finalize_timings()
             print({"service": "inference", "event": "predict_inference_end", "rows": int(df_transformed_predictions.shape[0])})
@@ -633,7 +961,16 @@ class Inferencer:
                     "t_save_publish_ms": round(timings.get("save_publish_ms", 0.0), 3),
                     "t_model_branch_ms": round(timings.get("model_branch_ms", 0.0), 3),
                     "t_total_ms": round(timings.get("overall_ms", 0.0), 3),
+                    # Phase-5: Preprocessing timings
+                    "t_preprocessing_total_ms": round(timings.get("preprocessing_total_ms", 0.0), 3),
+                    "t_feature_engineering_ms": round(timings.get("feature_engineering_ms", 0.0), 3),
+                    "t_window_preparation_ms": round(timings.get("window_preparation_ms", 0.0), 3),
                     "model_predict_calls": int(timings.get("model_predict_calls", 0)),
+                    "quantization_applied": self.quantization_applied,
+                    "onnx_enabled": self.onnx_session is not None,
+                    "async_logging_used": timings.get("async_logging_used", 0) > 0,
+                    "onnx_predict_calls": int(timings.get("onnx_predict_calls", 0)),
+                    "pytorch_predict_calls": int(timings.get("pytorch_predict_calls", 0)),
                 }
                 print({
                     "service": "inference",
@@ -690,10 +1027,12 @@ class Inferencer:
 
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+        # Phase-5: Window preparation timing
         window_start = time.perf_counter()
         X_eval, _ = window_data(df_eval, TIME_FEATURES, self.input_seq_len, self.output_seq_len)
         if timings is not None:
             timings["window_data_ms"] = (time.perf_counter() - window_start) * 1000.0
+            timings["window_preparation_ms"] = timings["window_data_ms"]  # Alias for Phase-5 reporting
             timings["window_rows"] = float(X_eval.shape[0])
         X_eval_tensor = torch.from_numpy(X_eval).float().to(device)
 
@@ -705,12 +1044,46 @@ class Inferencer:
 
         def _timed_predict(payload):
             start = time.perf_counter()
+            # Phase-2: Try ONNX Runtime first if available, fallback to PyTorch
+            if self.onnx_session is not None:
+                try:
+                    import torch
+                    # ONNX expects numpy array input
+                    if isinstance(payload, torch.Tensor):
+                        onnx_input = payload.cpu().numpy()
+                    else:
+                        onnx_input = payload
+                    
+                    # Ensure correct shape for ONNX (batch, seq_len, features)
+                    if onnx_input.ndim == 2:
+                        onnx_input = np.expand_dims(onnx_input, axis=0)
+                    
+                    ort_inputs = {self.onnx_session.get_inputs()[0].name: onnx_input.astype(np.float32)}
+                    ort_outputs = self.onnx_session.run(None, ort_inputs)
+                    result = ort_outputs[0]  # ONNX returns list of outputs
+                    
+                    if timings is not None:
+                        timings.setdefault("model_predict_ms", 0.0)
+                        timings.setdefault("model_predict_calls", 0.0)
+                        timings.setdefault("onnx_predict_calls", 0.0)
+                        timings["model_predict_ms"] += (time.perf_counter() - start) * 1000.0
+                        timings["model_predict_calls"] += 1.0
+                        timings["onnx_predict_calls"] += 1.0
+                    return result
+                except Exception as onnx_err:
+                    # ONNX failed, fallback to PyTorch
+                    print({"service": "inference", "event": "onnx_predict_fallback", "error": str(onnx_err)[:200]})
+                    self.onnx_session = None  # Disable for subsequent calls
+            
+            # Standard PyTorch/MLflow prediction
             result = self.current_model.predict(payload)  # type: ignore
             if timings is not None:
                 timings.setdefault("model_predict_ms", 0.0)
                 timings.setdefault("model_predict_calls", 0.0)
+                timings.setdefault("pytorch_predict_calls", 0.0)
                 timings["model_predict_ms"] += (time.perf_counter() - start) * 1000.0
                 timings["model_predict_calls"] += 1.0
+                timings["pytorch_predict_calls"] += 1.0
             return result
 
         loop_start = None
@@ -776,20 +1149,33 @@ class Inferencer:
                             "n_features": int(len(FEATURES))
                         })
 
+                    # Phase-5: Optimized autoregressive loop - reduce allocations
                     next_step_idx = SAMPLE_IDX + absolute_step + 1
                     if next_step_idx < X_eval_tensor.shape[0]:
-                        # Safe: use the next real row
+                        # Safe: use the next real row (in-place update to reuse memory)
                         current_sequence = X_eval_tensor[next_step_idx].unsqueeze(0).to(device)
                     else:
                         # Need to extend with predictions (recursive mode). We may only have endogenous prediction(s).
                         extension_idx = absolute_step + 1 - available_future_steps
                         if extension_idx < df_predictions.shape[0]:
+                            # Phase-5: Reduce allocations by reusing current_sequence buffer
                             # Build a full feature vector of the SAME dimensionality as the original input sequence.
                             feature_dim = current_sequence.shape[-1]
                             pred_dim = current_pred.shape[0]
-                            # Allocate full vector and copy endogenous prediction(s) at the front.
-                            pred_tensor_full = torch.zeros(1, 1, feature_dim, device=device)
-                            pred_tensor_full[0, 0, :pred_dim] = torch.tensor(current_pred, dtype=torch.float32, device=device)
+                            
+                            # Preallocate once at loop start (amortized cost)
+                            if not hasattr(self, '_pred_buffer_cache'):
+                                self._pred_buffer_cache = {}
+                            
+                            cache_key = (feature_dim, pred_dim)
+                            if cache_key not in self._pred_buffer_cache:
+                                self._pred_buffer_cache[cache_key] = torch.zeros(1, 1, feature_dim, device=device)
+                            
+                            pred_tensor_full = self._pred_buffer_cache[cache_key]
+                            
+                            # Fill with prediction (in-place)
+                            pred_tensor_full[0, 0, :pred_dim] = torch.from_numpy(current_pred).to(device)
+                            
                             # Fill remaining exogenous feature slots with last known real values (persistence strategy)
                             if pred_dim < feature_dim:
                                 pred_tensor_full[0, 0, pred_dim:] = current_sequence[0, -1, pred_dim:]
@@ -802,7 +1188,9 @@ class Inferencer:
                                     "feature_dim": int(feature_dim),
                                     "strategy": "pad_with_last_exogenous"
                                 })
-                            current_sequence = torch.cat((current_sequence[:, 1:, :], pred_tensor_full), dim=1)
+                            # Phase-5: In-place concatenation using slice assignment
+                            current_sequence[:, :-1, :] = current_sequence[:, 1:, :].clone()
+                            current_sequence[:, -1:, :] = pred_tensor_full
                         else:
                             print(f"[Warning] df_predictions extension exhausted at index {extension_idx}. Stopping inference.")
                             break
@@ -923,9 +1311,8 @@ class Inferencer:
             if timings is not None:
                 timings.setdefault("inverse_scale_ms", 0.0)
 
-        print(f"Prophet Inference completed:")
-        print(f"- Total predictions generated: {df_transformed_predictions.shape[0]}")
-        print(f"- Features forecasted: {list(df_transformed_predictions.columns)}")
+        # Prophet inference summaries disabled
+        pass
 
         return df_transformed_predictions
 
@@ -990,9 +1377,8 @@ class Inferencer:
             if timings is not None:
                 timings.setdefault("inverse_scale_ms", 0.0)
 
-        print(f"StatsForecast Inference completed:")
-        print(f"- Total predictions generated: {df_transformed_predictions.shape[0]}")
-        print(f"- Features forecasted: {df_transformed_predictions.columns.to_list()}")
+        # StatsForecast inference summaries disabled
+        pass
 
         return df_transformed_predictions
 

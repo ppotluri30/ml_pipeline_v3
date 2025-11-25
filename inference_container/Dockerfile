@@ -40,13 +40,16 @@ COPY shared/ /app/shared/
 EXPOSE 8000
 
 # Default, env-driven Uvicorn HTTP server settings (safe to override in compose)
-ENV UVICORN_WORKERS=1 \
+# Phase-3: Multi-worker Uvicorn (2-4 workers based on CPU cores)
+ENV UVICORN_WORKERS=2 \
     UVICORN_TIMEOUT_KEEP_ALIVE=60 \
     UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN=30 \
     UVICORN_LIMIT_CONCURRENCY=1000 \
-    INFERENCE_START_IN_APP=1
+    INFERENCE_START_IN_APP=1 \
+    ENABLE_OPPORTUNISTIC_BATCHING=1
 
 # UNIFIED SINGLE-PROCESS ARCHITECTURE:
 # Run only uvicorn; Kafka consumer starts within FastAPI via INFERENCE_START_IN_APP=1
 # This ensures main.py runtime and api_server.py share the same memory space and service.df
-CMD ["sh", "-c", "exec uvicorn api_server:app --host 0.0.0.0 --port 8000 --log-level info --access-log --workers ${UVICORN_WORKERS:-1} --limit-concurrency ${UVICORN_LIMIT_CONCURRENCY:-1000} --timeout-keep-alive ${UVICORN_TIMEOUT_KEEP_ALIVE:-60} --timeout-graceful-shutdown ${UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN:-30}"]
+# Phase-3: Auto-calculate workers based on CPU cores (min 2, max 4)
+CMD ["sh", "-c", "WORKERS=$(python3 -c 'import os; cores=os.cpu_count() or 2; print(min(max(2, cores), 4))'); exec uvicorn api_server:app --host 0.0.0.0 --port 8000 --log-level info --access-log --workers ${UVICORN_WORKERS:-$WORKERS} --limit-concurrency ${UVICORN_LIMIT_CONCURRENCY:-1000} --timeout-keep-alive ${UVICORN_TIMEOUT_KEEP_ALIVE:-60} --timeout-graceful-shutdown ${UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN:-30}"]
