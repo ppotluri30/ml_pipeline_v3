@@ -36,6 +36,8 @@ spec:
               value: inference-data
             - name: CONSUMER_TOPIC_1
               value: model-training
+            - name: PROMOTION_TOPIC
+              value: model-selected
             - name: GATEWAY_URL
               value: http://fastapi-app:8000
             - name: KAFKA_BOOTSTRAP_SERVERS
@@ -46,10 +48,10 @@ spec:
               value: http://mlflow:5000
             - name: PRODUCER_TOPIC
               value: performance-eval
-          image: inference
+          image: inference:phase1-optimized
           imagePullPolicy: IfNotPresent
           name: inference
           ports:
-            - containerPort: 8022
+            - containerPort: 8000
               protocol: TCP
       restartPolicy: Always

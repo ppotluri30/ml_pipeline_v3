@@ -1,0 +1,160 @@
+﻿
+{'service': 'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 0.034, 't_check_uniform_ms': 8.132, 't_prepare_prediction_frame_ms': 22.21, 't_window_data_ms': 13.39, 't_model_predict_ms': 34.176, 
+'t_pytorch_loop_ms': 36.041, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.054, 't_model_branch_ms': 65.115, 't_total_ms': 95.629, 'model_predict_calls': 1}
+{'service': 'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 0.06, 't_check_uniform_ms': 7.598, 't_prepare_prediction_frame_ms': 15.808, 't_window_data_ms': 9.042, 't_model_predict_ms': 29.689, 
+'t_pytorch_loop_ms': 32.119, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.009, 't_model_branch_ms': 42.314, 't_total_ms': 65.88, 'model_predict_calls': 1}
+{'service': 'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 1.087, 't_check_uniform_ms': 4.838, 't_prepare_prediction_frame_ms': 11.517, 't_window_data_ms': 5.781, 't_model_predict_ms': 36.738, 
+'t_pytorch_loop_ms': 60.229, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.009, 't_model_branch_ms': 92.741, 't_total_ms': 110.245, 'model_predict_calls': 1}
+{'service': 'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 0.17, 't_check_uniform_ms': 15.374, 't_prepare_prediction_frame_ms': 14.667, 't_window_data_ms': 3.747, 't_model_predict_ms': 26.298, 
+'t_pytorch_loop_ms': 29.241, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.007, 't_model_branch_ms': 35.139, 't_total_ms': 65.402, 'model_predict_calls': 1}
+{'service': 'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 0.032, 't_check_uniform_ms': 4.062, 't_prepare_prediction_frame_ms': 15.949, 't_window_data_ms': 5.683, 't_model_predict_ms': 36.228, 
+'t_pytorch_loop_ms': 46.798, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.014, 't_model_branch_ms': 54.341, 't_total_ms': 74.468, 'model_predict_calls': 1}
+{'service': 'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 0.026, 't_check_uniform_ms': 24.408, 't_prepare_prediction_frame_ms': 30.224, 't_window_data_ms': 4.0, 't_model_predict_ms': 10.743, 
+'t_pytorch_loop_ms': 26.165, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.008, 't_model_branch_ms': 33.1, 't_total_ms': 88.13, 'model_predict_calls': 1}
+{'service': 'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 0.085, 't_check_uniform_ms': 4.544, 't_prepare_prediction_frame_ms': 47.915, 't_window_data_ms': 4.236, 't_model_predict_ms': 34.366, 
+'t_pytorch_loop_ms': 37.829, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.009, 't_model_branch_ms': 45.895, 't_total_ms': 98.532, 'model_predict_calls': 1}
+{'service': 'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 0.047, 't_check_uniform_ms': 3.928, 't_prepare_prediction_frame_ms': 42.733, 't_window_data_ms': 6.128, 't_model_predict_ms': 36.463, 
+'t_pytorch_loop_ms': 39.32, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.01, 't_model_branch_ms': 46.778, 't_total_ms': 93.551, 'model_predict_calls': 1}
+{'service': 'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 0.053, 't_check_uniform_ms': 12.46, 't_prepare_prediction_frame_ms': 54.375, 't_window_data_ms': 6.387, 't_model_predict_ms': 19.198, 
+'t_pytorch_loop_ms': 21.618, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.008, 't_model_branch_ms': 29.283, 't_total_ms': 96.284, 'model_predict_calls': 1}
+{'service': 'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 0.033, 't_check_uniform_ms': 17.564, 't_prepare_prediction_frame_ms': 26.252, 't_window_data_ms': 3.917, 't_model_predict_ms': 38.59, 
+'t_pytorch_loop_ms': 40.728, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.014, 't_model_branch_ms': 59.661, 't_total_ms': 103.573, 'model_predict_calls': 1}
+{'service': 'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 0.089, 't_check_uniform_ms': 6.359, 't_prepare_prediction_frame_ms': 13.884, 't_window_data_ms': 5.065, 't_model_predict_ms': 20.239, 
+'t_pytorch_loop_ms': 22.342, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.009, 't_model_branch_ms': 28.618, 't_total_ms': 49.012, 'model_predict_calls': 1}
+{'service': 'inference', 'event': 'predict_inline_start', 'source': 'api', 'req_id': 'a0e5cf0d', 'rows': 30, 'inference_length': 1, 'active_workers': 3, 'concurrency_limit': 16, 'wait_ms': 0, 'prep_ms': 53}{'service': 
+'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 0.088, 't_check_uniform_ms': 10.455, 't_prepare_prediction_frame_ms': 31.155, 't_window_data_ms': 5.12, 't_model_predict_ms': 37.864, 't_pytorch_loop_ms': 
+42.928, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.015, 't_model_branch_ms': 65.687, 't_total_ms': 107.452, 'model_predict_calls': 1}
+{'service': 'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 0.147, 't_check_uniform_ms': 11.309, 't_prepare_prediction_frame_ms': 38.791, 't_window_data_ms': 4.217, 't_model_predict_ms': 22.127, 
+'t_pytorch_loop_ms': 24.479, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.01, 't_model_branch_ms': 31.062, 't_total_ms': 81.377, 'model_predict_calls': 1}
+[PANDAS_TRACE] {"trace_type": "dataframe", "stage": "exit_success", "func": "time_to_feature", "shape": [1, 17], "columns": ["down", "up", "rnti_count", "mcs_down", "mcs_down_var", "mcs_up", "mcs_up_var", "rb_down", 
+"rb_down_var", "rb_up", "rb_up_var", "min_of_day_sin", "min_of_day_cos", "day_of_week_sin", "day_of_week_cos", "day_of_year_sin", "day_of_year_cos"], "index_type": "DatetimeIndex", "index_unique": 1, "index_sample": 
+["2025-11-28 22:15:47"], "index_has_tz": false}{'service': 'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 0.07, 't_check_uniform_ms': 18.284, 't_prepare_prediction_frame_ms': 20.67, 't_window_data_ms': 
+2.885, 't_model_predict_ms': 20.943, 't_pytorch_loop_ms': 23.029, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.015, 't_model_branch_ms': 43.322, 't_total_ms': 82.421, 'model_predict_calls': 1}
+{'service': 'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 2.112, 't_check_uniform_ms': 9.89, 't_prepare_prediction_frame_ms': 15.398, 't_window_data_ms': 3.327, 't_model_predict_ms': 21.247, 
+'t_pytorch_loop_ms': 22.796, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.01, 't_model_branch_ms': 28.236, 't_total_ms': 55.703, 'model_predict_calls': 1}[PANDAS_TRACE] {"trace_type": "operation", "operation": 
+"perform_inference_start", "df_eval_provided": true, "has_model": true}
+{'service': 'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 0.445, 't_check_uniform_ms': 4.412, 't_prepare_prediction_frame_ms': 11.347, 't_window_data_ms': 3.343, 't_model_predict_ms': 16.003, 
+'t_pytorch_loop_ms': 19.468, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.01, 't_model_branch_ms': 26.425, 't_total_ms': 42.703, 'model_predict_calls': 1}
+{'service': 'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 0.03, 't_check_uniform_ms': 3.607, 't_prepare_prediction_frame_ms': 9.889, 't_window_data_ms': 3.688, 't_model_predict_ms': 16.344, 
+'t_pytorch_loop_ms': 18.689, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.007, 't_model_branch_ms': 25.973, 't_total_ms': 39.555, 'model_predict_calls': 1}
+{'service': 'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 0.021, 't_check_uniform_ms': 3.26, 't_prepare_prediction_frame_ms': 11.615, 't_window_data_ms': 2.815, 't_model_predict_ms': 29.812, 
+'t_pytorch_loop_ms': 32.158, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.037, 't_model_branch_ms': 36.034, 't_total_ms': 51.008, 'model_predict_calls': 1}
+{'service': 'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 0.7, 't_check_uniform_ms': 3.82, 't_prepare_prediction_frame_ms': 16.771, 't_window_data_ms': 12.598, 't_model_predict_ms': 27.126, 
+'t_pytorch_loop_ms': 35.678, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.01, 't_model_branch_ms': 56.592, 't_total_ms': 77.947, 'model_predict_calls': 1}
+{'service': 'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 0.039, 't_check_uniform_ms': 9.025, 't_prepare_prediction_frame_ms': 13.492, 't_window_data_ms': 3.407, 't_model_predict_ms': 29.111, 
+'t_pytorch_loop_ms': 31.162, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.016, 't_model_branch_ms': 54.874, 't_total_ms': 77.51, 'model_predict_calls': 1}
+{'service': 'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 6.713, 't_check_uniform_ms': 10.299, 't_prepare_prediction_frame_ms': 30.302, 't_window_data_ms': 5.24, 't_model_predict_ms': 21.26, 
+'t_pytorch_loop_ms': 23.704, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.01, 't_model_branch_ms': 32.354, 't_total_ms': 79.729, 'model_predict_calls': 1}
+{'service': 'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 0.048, 't_check_uniform_ms': 4.681, 't_prepare_prediction_frame_ms': 9.501, 't_window_data_ms': 3.978, 't_model_predict_ms': 22.304, 
+'t_pytorch_loop_ms': 23.716, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.011, 't_model_branch_ms': 29.14, 't_total_ms': 43.443, 'model_predict_calls': 1}
+{'service': 'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 0.031, 't_check_uniform_ms': 5.315, 't_prepare_prediction_frame_ms': 13.449, 't_window_data_ms': 7.45, 't_model_predict_ms': 19.374, 
+'t_pytorch_loop_ms': 20.965, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.007, 't_model_branch_ms': 29.534, 't_total_ms': 48.405, 'model_predict_calls': 1}
+{'service': 'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 0.06, 't_check_uniform_ms': 3.898, 't_prepare_prediction_frame_ms': 12.456, 't_window_data_ms': 4.214, 't_model_predict_ms': 20.095, 
+'t_pytorch_loop_ms': 22.227, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.007, 't_model_branch_ms': 27.825, 't_total_ms': 44.291, 'model_predict_calls': 1}
+{'service': 'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 1.66, 't_check_uniform_ms': 7.889, 't_prepare_prediction_frame_ms': 15.09, 't_window_data_ms': 3.183, 't_model_predict_ms': 23.477, 
+'t_pytorch_loop_ms': 25.385, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.009, 't_model_branch_ms': 29.512, 't_total_ms': 54.212, 'model_predict_calls': 1}
+{'service': 'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 0.039, 't_check_uniform_ms': 4.826, 't_prepare_prediction_frame_ms': 11.2, 't_window_data_ms': 3.71, 't_model_predict_ms': 18.971, 
+'t_pytorch_loop_ms': 20.966, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.01, 't_model_branch_ms': 25.895, 't_total_ms': 42.044, 'model_predict_calls': 1}
+{'service': 'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 0.034, 't_check_uniform_ms': 3.956, 't_prepare_prediction_frame_ms': 12.804, 't_window_data_ms': 4.248, 't_model_predict_ms': 25.659, 
+'t_pytorch_loop_ms': 27.363, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.008, 't_model_branch_ms': 32.85, 't_total_ms': 49.712, 'model_predict_calls': 1}
+{'service': 'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 1.009, 't_check_uniform_ms': 18.61, 't_prepare_prediction_frame_ms': 16.176, 't_window_data_ms': 4.192, 't_model_predict_ms': 34.576, 
+'t_pytorch_loop_ms': 39.706, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.011, 't_model_branch_ms': 54.141, 't_total_ms': 90.022, 'model_predict_calls': 1}
+[PREDICT_DEBUG] req_id=7939a1e2: req is None? False{'service': 'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 0.976, 't_check_uniform_ms': 23.469, 't_prepare_prediction_frame_ms': 18.429, 
+'t_window_data_ms': 6.095, 't_model_predict_ms': 21.068, 't_pytorch_loop_ms': 23.239, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.008, 't_model_branch_ms': 42.821, 't_total_ms': 85.763, 'model_predict_calls': 1}
+[DATA_UTILS_TIME_TO_FEATURE_AFTER_ASSIGN] unique=30{'service': 'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 0.15, 't_check_uniform_ms': 16.286, 't_prepare_prediction_frame_ms': 22.304, 
+'t_window_data_ms': 2.318, 't_model_predict_ms': 25.386, 't_pytorch_loop_ms': 28.095, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.02, 't_model_branch_ms': 43.453, 't_total_ms': 82.261, 'model_predict_calls': 1}
+{'service': 'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 0.045, 't_check_uniform_ms': 20.085, 't_prepare_prediction_frame_ms': 27.27, 't_window_data_ms': 3.473, 't_model_predict_ms': 24.911, 
+'t_pytorch_loop_ms': 28.122, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.016, 't_model_branch_ms': 48.624, 't_total_ms': 96.101, 'model_predict_calls': 1}
+{'service': 'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 0.085, 't_check_uniform_ms': 11.276, 't_prepare_prediction_frame_ms': 23.377, 't_window_data_ms': 1.876, 't_model_predict_ms': 26.954, 
+'t_pytorch_loop_ms': 28.791, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.013, 't_model_branch_ms': 40.938, 't_total_ms': 75.756, 'model_predict_calls': 1}[PANDAS_TRACE] {"trace_type": "dataframe", "stage": 
+"after_set_index", "func": "_prepare_dataframe_for_inference", "candidate": "ts", "shape": [30, 11], "columns": ["down", "up", "rnti_count", "mcs_down", "mcs_down_var", "mcs_up", "mcs_up_var", "rb_down", "rb_down_var", 
+"rb_up", "rb_up_var"], "index_type": "DatetimeIndex", "index_unique": 30, "index_sample": ["2025-11-28 23:33:49", "2025-11-28 23:34:49", "2025-11-28 23:35:49"], "index_has_tz": false}
+{'service': 'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 6.545, 't_check_uniform_ms': 15.013, 't_prepare_prediction_frame_ms': 20.643, 't_window_data_ms': 4.782, 't_model_predict_ms': 53.026, 
+'t_pytorch_loop_ms': 58.422, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.011, 't_model_branch_ms': 82.168, 't_total_ms': 124.454, 'model_predict_calls': 1}
+{'service': 'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 0.294, 't_check_uniform_ms': 18.897, 't_prepare_prediction_frame_ms': 41.697, 't_window_data_ms': 8.308, 't_model_predict_ms': 30.006, 
+'t_pytorch_loop_ms': 40.084, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.008, 't_model_branch_ms': 50.726, 't_total_ms': 111.676, 'model_predict_calls': 1}
+{'service': 'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 1.015, 't_check_uniform_ms': 15.835, 't_prepare_prediction_frame_ms': 24.444, 't_window_data_ms': 6.001, 't_model_predict_ms': 17.507, 
+'t_pytorch_loop_ms': 19.529, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.011, 't_model_branch_ms': 26.928, 't_total_ms': 68.303, 'model_predict_calls': 1}
+{'service': 'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 0.037, 't_check_uniform_ms': 5.374, 't_prepare_prediction_frame_ms': 9.11, 't_window_data_ms': 4.759, 't_model_predict_ms': 19.759, 
+'t_pytorch_loop_ms': 21.932, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.012, 't_model_branch_ms': 28.971, 't_total_ms': 43.567, 'model_predict_calls': 1}
+{'service': 'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 0.031, 't_check_uniform_ms': 7.166, 't_prepare_prediction_frame_ms': 13.591, 't_window_data_ms': 12.5, 't_model_predict_ms': 18.233, 
+'t_pytorch_loop_ms': 21.143, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.008, 't_model_branch_ms': 35.981, 't_total_ms': 56.839, 'model_predict_calls': 1}
+{'service': 'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 0.054, 't_check_uniform_ms': 4.018, 't_prepare_prediction_frame_ms': 11.327, 't_window_data_ms': 4.636, 't_model_predict_ms': 17.058, 
+'t_pytorch_loop_ms': 18.844, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.008, 't_model_branch_ms': 24.562, 't_total_ms': 40.009, 'model_predict_calls': 1}
+{'service': 'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 2.323, 't_check_uniform_ms': 16.031, 't_prepare_prediction_frame_ms': 30.545, 't_window_data_ms': 2.823, 't_model_predict_ms': 20.695, 
+'t_pytorch_loop_ms': 34.548, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.012, 't_model_branch_ms': 40.01, 't_total_ms': 89.147, 'model_predict_calls': 1}
+{'service': 'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 1.15, 't_check_uniform_ms': 3.974, 't_prepare_prediction_frame_ms': 15.988, 't_window_data_ms': 7.676, 't_model_predict_ms': 37.039, 
+'t_pytorch_loop_ms': 43.316, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.009, 't_model_branch_ms': 52.532, 't_total_ms': 73.698, 'model_predict_calls': 1}
+{'service': 'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 0.076, 't_check_uniform_ms': 17.611, 't_prepare_prediction_frame_ms': 45.174, 't_window_data_ms': 10.935, 't_model_predict_ms': 26.597, 
+'t_pytorch_loop_ms': 28.569, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.016, 't_model_branch_ms': 69.309, 't_total_ms': 132.258, 'model_predict_calls': 1}[PANDAS_TRACE] {"trace_type": "operation", "operation": 
+"after_assign", "func": "time_to_feature", "shape": [30, 14], "columns": ["down", "up", "rnti_count", "mcs_down", "mcs_down_var", "mcs_up", "mcs_up_var", "rb_down", "rb_down_var", "rb_up", "rb_up_var", "min_of_day", 
+"day_of_week", "day_of_year"]}
+{'service': 'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 2.906, 't_check_uniform_ms': 27.339, 't_prepare_prediction_frame_ms': 52.0, 't_window_data_ms': 3.904, 't_model_predict_ms': 26.021, 
+'t_pytorch_loop_ms': 28.984, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.014, 't_model_branch_ms': 52.986, 't_total_ms': 135.369, 'model_predict_calls': 1}[PANDAS_TRACE] {"trace_type": "operation", "operation": 
+"after_assign", "func": "time_to_feature", "shape": [1, 20], "columns": ["down", "up", "rnti_count", "mcs_down", "mcs_down_var", "mcs_up", "mcs_up_var", "rb_down", "rb_down_var", "rb_up", "rb_up_var", "min_of_day_sin", 
+"min_of_day_cos", "day_of_week_sin", "day_of_week_cos", "day_of_year_sin", "day_of_year_cos", "min_of_day", "day_of_week", "day_of_year"]}[PREDICT_DEBUG] req_id=734b40d3: req type=<class 'api_server.PredictRequest'>
+{'service': 'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 2.649, 't_check_uniform_ms': 12.365, 't_prepare_prediction_frame_ms': 28.108, 't_window_data_ms': 4.018, 't_model_predict_ms': 34.773, 
+'t_pytorch_loop_ms': 37.568, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.01, 't_model_branch_ms': 68.912, 't_total_ms': 112.109, 'model_predict_calls': 1}
+{'service': 'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 1.219, 't_check_uniform_ms': 7.695, 't_prepare_prediction_frame_ms': 21.233, 't_window_data_ms': 14.727, 't_model_predict_ms': 28.763, 
+'t_pytorch_loop_ms': 30.869, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.014, 't_model_branch_ms': 55.381, 't_total_ms': 85.597, 'model_predict_calls': 1}
+{'service': 'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 0.456, 't_check_uniform_ms': 17.297, 't_prepare_prediction_frame_ms': 31.314, 't_window_data_ms': 4.273, 't_model_predict_ms': 34.521, 
+'t_pytorch_loop_ms': 38.24, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.009, 't_model_branch_ms': 52.425, 't_total_ms': 101.721, 'model_predict_calls': 1}
+{'service': 'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 0.081, 't_check_uniform_ms': 11.039, 't_prepare_prediction_frame_ms': 23.832, 't_window_data_ms': 4.093, 't_model_predict_ms': 33.447, 
+'t_pytorch_loop_ms': 35.816, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.01, 't_model_branch_ms': 42.405, 't_total_ms': 77.439, 'model_predict_calls': 1}
+{'service': 'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 0.344, 't_check_uniform_ms': 14.245, 't_prepare_prediction_frame_ms': 11.796, 't_window_data_ms': 4.303, 't_model_predict_ms': 35.164, 
+'t_pytorch_loop_ms': 37.264, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.009, 't_model_branch_ms': 64.675, 't_total_ms': 91.177, 'model_predict_calls': 1}
+{'service': 'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 0.038, 't_check_uniform_ms': 10.508, 't_prepare_prediction_frame_ms': 30.986, 't_window_data_ms': 4.572, 't_model_predict_ms': 42.39, 
+'t_pytorch_loop_ms': 49.273, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.018, 't_model_branch_ms': 89.18, 't_total_ms': 130.817, 'model_predict_calls': 1}
+{'service': 'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 0.091, 't_check_uniform_ms': 21.913, 't_prepare_prediction_frame_ms': 44.376, 't_window_data_ms': 11.027, 't_model_predict_ms': 31.22, 
+'t_pytorch_loop_ms': 36.251, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.016, 't_model_branch_ms': 64.278, 't_total_ms': 130.745, 'model_predict_calls': 1}[PANDAS_TRACE] {"trace_type": "operation", "operation": 
+"time_diffs_calculated", "func": "check_uniform", "diffs_count": 30, "non_null_count": 29}
+{'service': 'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 0.13, 't_check_uniform_ms': 41.356, 't_prepare_prediction_frame_ms': 40.765, 't_window_data_ms': 4.349, 't_model_predict_ms': 24.108, 
+'t_pytorch_loop_ms': 26.31, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.008, 't_model_branch_ms': 31.817, 't_total_ms': 114.165, 'model_predict_calls': 1}
+{'service': 'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 0.189, 't_check_uniform_ms': 25.075, 't_prepare_prediction_frame_ms': 20.38, 't_window_data_ms': 4.782, 't_model_predict_ms': 20.431, 
+'t_pytorch_loop_ms': 26.1, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.02, 't_model_branch_ms': 33.166, 't_total_ms': 78.906, 'model_predict_calls': 1}
+[PANDAS_TRACE] {"trace_type": "dataframe", "stage": "time_to_feature_exit", "func": "time_to_feature", "shape": [1, 17], "columns": ["down", "up", "rnti_count", "mcs_down", "mcs_down_var", "mcs_up", "mcs_up_var", "rb_down", 
+"rb_down_var", "rb_up", "rb_up_var", "min_of_day_sin", "min_of_day_cos", "day_of_week_sin", "day_of_week_cos", "day_of_year_sin", "day_of_year_cos"], "index_type": "DatetimeIndex", "index_unique": 1, "index_sample": 
+["2025-11-29 01:19:51"], "index_has_tz": false}{'service': 'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 0.044, 't_check_uniform_ms': 3.86, 't_prepare_prediction_frame_ms': 10.378, 't_window_data_ms': 
+4.897, 't_model_predict_ms': 32.815, 't_pytorch_loop_ms': 34.592, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.01, 't_model_branch_ms': 47.845, 't_total_ms': 62.184, 'model_predict_calls': 1}
+{'service': 'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 0.07, 't_check_uniform_ms': 7.253, 't_prepare_prediction_frame_ms': 25.119, 't_window_data_ms': 11.713, 't_model_predict_ms': 28.004, 
+'t_pytorch_loop_ms': 30.295, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.012, 't_model_branch_ms': 45.461, 't_total_ms': 77.966, 'model_predict_calls': 1}
+{'service': 'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 0.08, 't_check_uniform_ms': 5.911, 't_prepare_prediction_frame_ms': 21.62, 't_window_data_ms': 6.969, 't_model_predict_ms': 26.182, 
+'t_pytorch_loop_ms': 28.554, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.01, 't_model_branch_ms': 46.544, 't_total_ms': 74.23, 'model_predict_calls': 1}
+{'service': 'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 0.254, 't_check_uniform_ms': 8.59, 't_prepare_prediction_frame_ms': 20.374, 't_window_data_ms': 4.776, 't_model_predict_ms': 34.725, 
+'t_pytorch_loop_ms': 38.05, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.011, 't_model_branch_ms': 48.848, 't_total_ms': 78.152, 'model_predict_calls': 1}
+{'service': 'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 1.928, 't_check_uniform_ms': 12.151, 't_prepare_prediction_frame_ms': 16.567, 't_window_data_ms': 4.993, 't_model_predict_ms': 29.333, 
+'t_pytorch_loop_ms': 31.257, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.007, 't_model_branch_ms': 47.311, 't_total_ms': 78.028, 'model_predict_calls': 1}
+{'service': 'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 0.869, 't_check_uniform_ms': 11.764, 't_prepare_prediction_frame_ms': 19.722, 't_window_data_ms': 5.571, 't_model_predict_ms': 17.393, 
+'t_pytorch_loop_ms': 27.278, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.014, 't_model_branch_ms': 57.173, 't_total_ms': 89.647, 'model_predict_calls': 1}
+{'service': 'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 0.597, 't_check_uniform_ms': 7.828, 't_prepare_prediction_frame_ms': 16.417, 't_window_data_ms': 5.922, 't_model_predict_ms': 25.494, 
+'t_pytorch_loop_ms': 30.192, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.011, 't_model_branch_ms': 47.375, 't_total_ms': 72.314, 'model_predict_calls': 1}
+{'service': 'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 0.886, 't_check_uniform_ms': 8.439, 't_prepare_prediction_frame_ms': 13.941, 't_window_data_ms': 6.562, 't_model_predict_ms': 36.058, 
+'t_pytorch_loop_ms': 38.346, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.009, 't_model_branch_ms': 63.299, 't_total_ms': 86.649, 'model_predict_calls': 1}
+{'service': 'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 0.04, 't_check_uniform_ms': 6.106, 't_prepare_prediction_frame_ms': 18.259, 't_window_data_ms': 2.429, 't_model_predict_ms': 21.88, 
+'t_pytorch_loop_ms': 24.089, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.041, 't_model_branch_ms': 28.001, 't_total_ms': 52.52, 'model_predict_calls': 1}
+{'service': 'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 0.065, 't_check_uniform_ms': 3.343, 't_prepare_prediction_frame_ms': 18.434, 't_window_data_ms': 8.427, 't_model_predict_ms': 34.069, 
+'t_pytorch_loop_ms': 45.366, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.009, 't_model_branch_ms': 67.539, 't_total_ms': 89.439, 'model_predict_calls': 1}
+{'service': 'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 0.059, 't_check_uniform_ms': 5.143, 't_prepare_prediction_frame_ms': 18.363, 't_window_data_ms': 5.837, 't_model_predict_ms': 29.907, 
+'t_pytorch_loop_ms': 33.05, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.01, 't_model_branch_ms': 51.989, 't_total_ms': 75.622, 'model_predict_calls': 1}
+{'service': 'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 0.818, 't_check_uniform_ms': 5.25, 't_prepare_prediction_frame_ms': 18.012, 't_window_data_ms': 4.154, 't_model_predict_ms': 20.296, 
+'t_pytorch_loop_ms': 21.778, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.01, 't_model_branch_ms': 26.886, 't_total_ms': 51.022, 'model_predict_calls': 1}
+{'service': 'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 0.096, 't_check_uniform_ms': 4.007, 't_prepare_prediction_frame_ms': 12.8, 't_window_data_ms': 4.484, 't_model_predict_ms': 33.731, 
+'t_pytorch_loop_ms': 43.768, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.008, 't_model_branch_ms': 49.487, 't_total_ms': 66.447, 'model_predict_calls': 1}
+{'service': 'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 0.091, 't_check_uniform_ms': 7.203, 't_prepare_prediction_frame_ms': 34.714, 't_window_data_ms': 6.241, 't_model_predict_ms': 71.176, 
+'t_pytorch_loop_ms': 73.451, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.013, 't_model_branch_ms': 108.164, 't_total_ms': 150.272, 'model_predict_calls': 1}
+{'service': 'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 0.075, 't_check_uniform_ms': 19.044, 't_prepare_prediction_frame_ms': 55.637, 't_window_data_ms': 7.351, 't_model_predict_ms': 30.16, 
+'t_pytorch_loop_ms': 32.901, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.01, 't_model_branch_ms': 57.883, 't_total_ms': 132.776, 'model_predict_calls': 1}
+{'service': 'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 0.028, 't_check_uniform_ms': 10.72, 't_prepare_prediction_frame_ms': 21.988, 't_window_data_ms': 5.177, 't_model_predict_ms': 35.366, 
+'t_pytorch_loop_ms': 41.064, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.013, 't_model_branch_ms': 54.005, 't_total_ms': 86.844, 'model_predict_calls': 1}
+{'service': 'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 9.305, 't_check_uniform_ms': 10.754, 't_prepare_prediction_frame_ms': 19.977, 't_window_data_ms': 2.911, 't_model_predict_ms': 23.404, 
+'t_pytorch_loop_ms': 24.763, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.006, 't_model_branch_ms': 28.561, 't_total_ms': 68.707, 'model_predict_calls': 1}
+[PANDAS_TRACE] {"trace_type": "operation", "operation": "after_assign", "func": "time_to_feature", "shape": [1, 20], "columns": ["down", "up", "rnti_count", "mcs_down", "mcs_down_var", "mcs_up", "mcs_up_var", "rb_down", 
+"rb_down_var", "rb_up", "rb_up_var", "min_of_day_sin", "min_of_day_cos", "day_of_week_sin", "day_of_week_cos", "day_of_year_sin", "day_of_year_cos", "min_of_day", "day_of_week", "day_of_year"]}{'service': 'inference', 
+'event': 'predict_timing_breakdown', 't_precheck_ms': 7.599, 't_check_uniform_ms': 17.192, 't_prepare_prediction_frame_ms': 29.204, 't_window_data_ms': 4.535, 't_model_predict_ms': 41.654, 't_pytorch_loop_ms': 50.997, 
+'t_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.076, 't_model_branch_ms': 77.462, 't_total_ms': 131.613, 'model_predict_calls': 1}
+{'service': 'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 7.426, 't_check_uniform_ms': 33.457, 't_prepare_prediction_frame_ms': 29.813, 't_window_data_ms': 2.191, 't_model_predict_ms': 22.067, 
+'t_pytorch_loop_ms': 24.344, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.012, 't_model_branch_ms': 32.299, 't_total_ms': 103.059, 'model_predict_calls': 1}
+{'service': 'inference', 'event': 'predict_timing_breakdown', 't_precheck_ms': 5.379, 't_check_uniform_ms': 27.88, 't_prepare_prediction_frame_ms': 17.996, 't_window_data_ms': 5.081, 't_model_predict_ms': 18.881, 
+'t_pytorch_loop_ms': 20.229, 't_inverse_scale_ms': 0.0, 't_save_publish_ms': 0.006, 't_model_branch_ms': 26.155, 't_total_ms': 77.467, 'model_predict_calls': 1}
+
+

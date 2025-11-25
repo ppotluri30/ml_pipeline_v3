@@ -457,6 +457,16 @@ def message_handler(service: Inferencer, message_queue: queue.Queue):
                                     "index_unique": kafka_df.index.nunique()
                                 })
 
+                            # Log queue_enqueued for Kafka preprocessing path (matching HTTP path behavior)
+                            print({
+                                "service": "inference",
+                                "event": "queue_enqueued",
+                                "source": "kafka_preprocessing",
+                                "object_key": object_key,
+                                "rows": len(kafka_df),
+                                "cols": len(kafka_df.columns),
+                            }, flush=True)
+
                             # ===== Perform inference on local kafka_df, NOT service.df =====
                             if service.current_model is not None:
                                 service.perform_inference(kafka_df)
@@ -504,6 +514,9 @@ def message_handler(service: Inferencer, message_queue: queue.Queue):
                             try:
                                 print(f"Loading promoted model via URI: {cand}")
                                 promoted_model = pyfunc.load_model(cand)
+                                # Phase-1: Apply JIT compilation if PyTorch model
+                                from inferencer import apply_jit_compilation
+                                apply_jit_compilation(promoted_model, service.model_class, run_id, model_type or '')
                                 service.current_model = promoted_model
                                 # Update core identity metadata BEFORE enrichment so logs reflect correct model_type
                                 service.current_run_id = run_id  # critical: previously missing caused stale run_id usage
@@ -707,6 +720,9 @@ def _attempt_load_promoted(service: Inferencer):
                 service.model_type = model_type or ''
                 service.current_run_id = run_id
                 print({"service": "inference", "event": "promotion_model_loaded_startup", "model_uri": cand, "run_id": run_id, "config_hash": cfg_hash})
+                # Phase-1: Apply JIT compilation if PyTorch model
+                from inferencer import apply_jit_compilation
+                apply_jit_compilation(service.current_model, service.model_class, run_id, model_type or '')
                 if run_id:
                     _enrich_loaded_model(service, run_id, model_type)
                 break
@@ -811,6 +827,9 @@ def _load_promoted_pointer(service: Inferencer):
         try:
             print(f"Loading promoted model at startup via URI: {cand}")
             service.current_model = pyfunc.load_model(cand)
+            # Phase-1: Apply JIT compilation if PyTorch model
+            from inferencer import apply_jit_compilation
+            apply_jit_compilation(service.current_model, service.model_class, run_id, model_type or '')
             service.current_run_name = model_type or ''
             service.model_type = model_type or ''
             service.current_experiment_name = experiment

@@ -36,6 +36,8 @@ def create_producer(**overrides: Any) -> KafkaProducer:
 def create_consumer(topic: str, group_id: str, **overrides: Any) -> KafkaConsumer:
     """
     Create a KafkaConsumer configured to receive and deserialize JSON messages.
+    CRITICAL FIX: Disable auto-commit to prevent message loss on startup.
+    Messages are now committed manually after successful processing.
     """
     bootstrap_servers = overrides.pop("bootstrap_servers", None) or _require_bootstrap_servers()
 
@@ -46,6 +48,7 @@ def create_consumer(topic: str, group_id: str, **overrides: Any) -> KafkaConsume
         value_deserializer=lambda v: json.loads(v.decode("utf-8")),
         key_deserializer=lambda k: k.decode("utf-8") if k else None,
         auto_offset_reset=overrides.pop("auto_offset_reset", "earliest"),
+        enable_auto_commit=overrides.pop("enable_auto_commit", False),  # CRITICAL: Disable auto-commit
         security_protocol="PLAINTEXT",
         api_version=(2, 5, 0),
         **overrides,

@@ -70,11 +70,16 @@ def env_var(var: str, default: Any = None) -> str:
 
 
 def _jlog(event: str, **extra):
-    base = {"service": "train", "event": event}
+    from datetime import datetime, timezone
+    base = {
+        "service": "train",
+        "event": event,
+        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+    }
     for k, v in extra.items():
         if v is not None:
             base[k] = v
-    print(json.dumps(base))
+    print(json.dumps(base), flush=True)
 
 
 def callback(message):
@@ -308,6 +313,26 @@ def _train_parquet(df: pd.DataFrame, meta: Dict[str, Any]):
         mlflow.log_artifact(scaler_path, artifact_path="scaler")
 
         model = train(model, train_loader, test_loader, epochs=EPOCHS, optimizer_type=optimizer, scheduled_learning=schedule, scheduled_sampling=ss, lr=LEARNING_RATE, criterion="mse", max_grad_norm=1.0, device=device, early_stopping=True, patience=PATIENCE)
+
+        # Log final metrics from MLflow run
+        try:
+            from mlflow.tracking import MlflowClient
+            _client = MlflowClient()
+            _run_data = _client.get_run(run_id)
+            _metrics = _run_data.data.metrics or {}
+            _final_metrics = {
+                "train_rmse": _metrics.get("train_rmse"),
+                "train_mae": _metrics.get("train_mae"),
+                "train_mse": _metrics.get("train_mse"),
+                "test_rmse": _metrics.get("test_rmse"),
+                "test_mae": _metrics.get("test_mae"),
+                "test_mse": _metrics.get("test_mse"),
+                "train_r2": _metrics.get("train_r2"),
+                "test_r2": _metrics.get("test_r2"),
+            }
+            _jlog("train_metrics_logged", run_id=run_id, model_type=MODEL_TYPE, metrics={k: v for k, v in _final_metrics.items() if v is not None})
+        except Exception as _me:  # noqa: BLE001
+            _jlog("train_metrics_log_fail", run_id=run_id, model_type=MODEL_TYPE, error=str(_me))
 
     # Log model artifact
         try:

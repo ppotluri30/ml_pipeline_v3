@@ -1,3 +1,10 @@
+# Phase-1 Optimization: Thread tuning to prevent CPU oversubscription
+import os
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["NUMEXPR_NUM_THREADS"] = "1"
+
 from client_utils import post_file
 from data_utils import window_data, check_uniform, time_to_feature, subset_scaler, _fix_zero_scale
 from kafka_utils import produce_message, publish_error
@@ -6,7 +13,6 @@ import numpy as np
 import pandas as pd
 import mlflow
 from mlflow.artifacts import download_artifacts  # type: ignore
-import os
 import pickle
 import tempfile
 import asyncio
@@ -15,6 +21,15 @@ import threading
 import time
 from typing import Tuple, Optional, Union, Dict
 from sklearn.preprocessing import MinMaxScaler, StandardScaler, RobustScaler, MaxAbsScaler
+
+# Phase-1 Optimization: Apply torch thread limits
+try:
+    import torch
+    torch.set_num_threads(1)
+    torch.set_num_interop_threads(1)
+    print({"service": "inference", "event": "thread_tuning_applied", "omp": 1, "mkl": 1, "torch_threads": 1})
+except ImportError:
+    pass
 
 # Constants - These should all be defined by the service later
 TIME_FEATURES = ["min_of_day", "day_of_week", "day_of_year"]
@@ -32,6 +47,66 @@ if not logger.handlers:
     logger.addHandler(handler)
 logger.setLevel(logging.INFO)
 logger.propagate = False
+
+
+def apply_jit_compilation(model, model_class: str, run_id: str, model_type: str) -> None:
+    """Phase-1 Optimization: Apply PyTorch JIT compilation to loaded model if applicable.
+    
+    This is a helper function to apply JIT compilation after mlflow.pyfunc.load_model() calls.
+    Safe to call multiple times - will skip if not PyTorch or already compiled.
+    Auto-detects PyTorch models if model_class not yet set.
+    """
+    print({"service": "inference", "event": "jit_check_start", "run_id": run_id, "model_type": model_type, "has_impl": hasattr(model, "_model_impl")})
+    if not hasattr(model, "_model_impl"):
+        return
+    
+    try:
+        import torch
+        
+        # Find the PyTorch model - try multiple paths
+        inner_model = None
+        
+        # Path 1: model._model_impl.pytorch_model (MLflow PyTorch flavor)
+        if hasattr(model._model_impl, "pytorch_model"):
+            inner_model = model._model_impl.pytorch_model
+        # Path 2: model._model_impl.python_model.model (custom wrapper)
+        elif hasattr(model._model_impl, "python_model") and hasattr(model._model_impl.python_model, "model"):
+            inner_model = model._model_impl.python_model.model
+        # Path 3: Direct access
+        elif hasattr(model._model_impl, "model"):
+            inner_model = model._model_impl.model
+        
+        if inner_model is None:
+            print({"service": "inference", "event": "jit_model_not_found", "run_id": run_id, "model_type": model_type})
+            return
+        
+        # Auto-detect if PyTorch model (check if has nn.Module methods)
+        is_pytorch = hasattr(inner_model, "eval") and hasattr(inner_model, "parameters")
+        print({"service": "inference", "event": "jit_pytorch_detection", "run_id": run_id, "is_pytorch": is_pytorch, "has_eval": hasattr(inner_model, "eval"), "has_parameters": hasattr(inner_model, "parameters")})
+        if not is_pytorch:
+            return
+        
+        # Check if already JIT-compiled
+        if isinstance(inner_model, torch.jit.ScriptModule):
+            print({"service": "inference", "event": "jit_already_compiled", "run_id": run_id, "model_type": model_type})
+            return
+        
+        # Apply JIT compilation
+        inner_model.eval()
+        try:
+            jit_model = torch.jit.script(inner_model)
+            # Update the reference based on which path we found
+            if hasattr(model._model_impl, "pytorch_model"):
+                model._model_impl.pytorch_model = jit_model
+            elif hasattr(model._model_impl, "python_model") and hasattr(model._model_impl.python_model, "model"):
+                model._model_impl.python_model.model = jit_model
+            elif hasattr(model._model_impl, "model"):
+                model._model_impl.model = jit_model
+            print({"service": "inference", "event": "jit_compiled", "run_id": run_id, "model_type": model_type})
+        except Exception as jit_err:
+            print({"service": "inference", "event": "jit_compile_failed", "run_id": run_id, "model_type": model_type, "error": str(jit_err)})
+    except Exception as jit_outer_err:
+        print({"service": "inference", "event": "jit_setup_failed", "run_id": run_id, "error": str(jit_outer_err)})
 
 
 def _read_simulated_delay() -> float:
@@ -184,6 +259,25 @@ class Inferencer:
                     print(f"Model dependencies (candidate='{subpath}'): {reqs}")
                     model = mlflow.pyfunc.load_model(candidate_uri)
                     self.current_model = model
+                    
+                    # Phase-1 Optimization: Apply PyTorch JIT compilation if applicable
+                    if self.model_class == "pytorch" and hasattr(model, "_model_impl"):
+                        try:
+                            import torch
+                            wrapped_model = getattr(model._model_impl, "python_model", None)
+                            if wrapped_model is not None and hasattr(wrapped_model, "model"):
+                                inner_model = wrapped_model.model
+                                if hasattr(inner_model, "eval"):
+                                    inner_model.eval()
+                                    try:
+                                        jit_model = torch.jit.script(inner_model)
+                                        wrapped_model.model = jit_model
+                                        print({"service": "inference", "event": "jit_compiled", "run_id": run_id, "model_type": self.model_type})
+                                    except Exception as jit_err:
+                                        print({"service": "inference", "event": "jit_compile_failed", "run_id": run_id, "model_type": self.model_type, "error": str(jit_err)})
+                        except Exception as jit_outer_err:
+                            print({"service": "inference", "event": "jit_setup_failed", "run_id": run_id, "error": str(jit_outer_err)})
+                    
                     self.current_experiment_name = experiment_name
                     self.current_run_name = run_name
                     print(f"✅ Model loaded successfully from subpath '{subpath}'.")
@@ -391,7 +485,8 @@ class Inferencer:
         def _finalize_timings() -> None:
             if "overall_ms" not in timings:
                 timings["overall_ms"] = (time.perf_counter() - overall_start) * 1000.0
-            self._last_inference_timings = {k: float(v) for k, v in timings.items()}
+            # Phase-1: Filter out non-numeric metadata (e.g., feature_engineering_method)
+            self._last_inference_timings = {k: float(v) for k, v in timings.items() if isinstance(v, (int, float))}
 
         print({"service": "inference", "event": "predict_inference_start", "inference_length": int(local_inference_length)})
         trace_operation("inference_params", input_seq_len=self.input_seq_len, output_seq_len=self.output_seq_len, inference_length=local_inference_length)
@@ -443,16 +538,69 @@ class Inferencer:
 
             start_timestamp = df_eval.index[adjusted_start_pos]
             stage_start = time.perf_counter()
-            df_predictions = pd.DataFrame(
-                index=pd.date_range(
+            
+            # Phase-1 Optimization: Fast NumPy-based feature engineering
+            try:
+                # Create timestamp index using numpy
+                timestamps = pd.date_range(
                     start=start_timestamp,
                     periods=local_inference_length,
                     freq=timedelta
-                ),
-                columns=df_eval.columns
-            )
-            df_predictions = time_to_feature(df_predictions)
-            timings["prepare_prediction_frame_ms"] = (time.perf_counter() - stage_start) * 1000.0
+                )
+                
+                # Pre-allocate DataFrame with same columns
+                df_predictions = pd.DataFrame(
+                    index=timestamps,
+                    columns=df_eval.columns
+                )
+                
+                # Fast NumPy feature engineering (replaces time_to_feature pandas operations)
+                ts_array = df_predictions.index.to_numpy(dtype="datetime64[m]")
+                minutes_since_epoch = ts_array.astype("int64")
+                
+                # Minute of day features (0-1439)
+                minutes = minutes_since_epoch % 1440
+                df_predictions["min_of_day_sin"] = np.sin(minutes * 2 * np.pi / 1440)
+                df_predictions["min_of_day_cos"] = np.cos(minutes * 2 * np.pi / 1440)
+                
+                # Day of week features (0-6)
+                days_since_epoch = ts_array.astype("datetime64[D]").astype("int64")
+                dow = (days_since_epoch + 4) % 7  # Adjust epoch offset to match pandas weekday
+                df_predictions["day_of_week_sin"] = np.sin(dow * 2 * np.pi / 7)
+                df_predictions["day_of_week_cos"] = np.cos(dow * 2 * np.pi / 7)
+                
+                # Day of year features (1-366)
+                start_of_year = ts_array.astype("datetime64[Y]")
+                days_in_year = (ts_array.astype("datetime64[D]") - start_of_year.astype("datetime64[D]")).astype("int64") + 1
+                df_predictions["day_of_year_sin"] = np.sin(days_in_year * 2 * np.pi / 366)
+                df_predictions["day_of_year_cos"] = np.cos(days_in_year * 2 * np.pi / 366)
+                
+                numpy_duration_ms = (time.perf_counter() - stage_start) * 1000.0
+                timings["prepare_prediction_frame_ms"] = numpy_duration_ms
+                timings["feature_engineering_method"] = "numpy_optimized"
+                
+                print({
+                    "service": "inference",
+                    "event": "feature_engineering_optimized",
+                    "duration_ms": round(numpy_duration_ms, 3),
+                    "method": "numpy",
+                    "rows": len(df_predictions)
+                })
+                
+            except Exception as fe_err:
+                # Fallback to original pandas implementation if numpy optimization fails
+                print({"service": "inference", "event": "feature_engineering_fallback", "error": str(fe_err)})
+                df_predictions = pd.DataFrame(
+                    index=pd.date_range(
+                        start=start_timestamp,
+                        periods=local_inference_length,
+                        freq=timedelta
+                    ),
+                    columns=df_eval.columns
+                )
+                df_predictions = time_to_feature(df_predictions)
+                timings["prepare_prediction_frame_ms"] = (time.perf_counter() - stage_start) * 1000.0
+                timings["feature_engineering_method"] = "pandas_fallback"
 
             branch_start = time.perf_counter()
             if self.model_class == "pytorch":
@@ -471,11 +619,53 @@ class Inferencer:
 
             _finalize_timings()
             print({"service": "inference", "event": "predict_inference_end", "rows": int(df_transformed_predictions.shape[0])})
+            
+            # Emit comprehensive timing breakdown for bottleneck profiling
+            try:
+                timing_breakdown = {
+                    "t_precheck_ms": round(timings.get("precheck_ms", 0.0), 3),
+                    "t_check_uniform_ms": round(timings.get("check_uniform_ms", 0.0), 3),
+                    "t_prepare_prediction_frame_ms": round(timings.get("prepare_prediction_frame_ms", 0.0), 3),
+                    "t_window_data_ms": round(timings.get("window_data_ms", 0.0), 3),
+                    "t_model_predict_ms": round(timings.get("model_predict_ms", 0.0), 3),
+                    "t_pytorch_loop_ms": round(timings.get("pytorch_loop_ms", 0.0), 3),
+                    "t_inverse_scale_ms": round(timings.get("inverse_scale_ms", 0.0), 3),
+                    "t_save_publish_ms": round(timings.get("save_publish_ms", 0.0), 3),
+                    "t_model_branch_ms": round(timings.get("model_branch_ms", 0.0), 3),
+                    "t_total_ms": round(timings.get("overall_ms", 0.0), 3),
+                    "model_predict_calls": int(timings.get("model_predict_calls", 0)),
+                }
+                print({
+                    "service": "inference",
+                    "event": "predict_timing_breakdown",
+                    **timing_breakdown
+                }, flush=True)
+            except Exception as _te:
+                print({"service": "inference", "event": "timing_breakdown_fail", "error": str(_te)})
+            
+            # Emit predict_inference_done with comprehensive metadata
+            try:
+                print({
+                    "service": "inference",
+                    "event": "predict_inference_done",
+                    "inference_id": getattr(self, "current_run_id", "unknown"),
+                    "duration_ms": round(timings.get("overall_ms", 0.0), 3),
+                    "model_type": self.model_type or "unknown",
+                    "run_id": getattr(self, "current_run_id", "unknown"),
+                    "prediction_steps": int(df_transformed_predictions.shape[0]),
+                    "input_sequence_length": int(self.input_seq_len),
+                    "output_shape": list(df_transformed_predictions.shape),
+                    "model_class": self.model_class,
+                }, flush=True)
+            except Exception as _de:
+                print({"service": "inference", "event": "predict_done_log_fail", "error": str(_de)})
+            
             try:
                 print({
                     "service": "inference",
                     "event": "inference_stage_timings",
-                    "timings_ms": {k: round(v, 3) for k, v in timings.items()},
+                    "timings_ms": {k: round(v, 3) for k, v in timings.items() if isinstance(v, (int, float))},
+                    "timing_metadata": {k: v for k, v in timings.items() if not isinstance(v, (int, float))},
                     "model_class": self.model_class,
                     "rows_in": int(total_rows),
                     "rows_out": int(df_transformed_predictions.shape[0])

@@ -10,11 +10,11 @@ spec:
   scaleTargetRef:
     name: inference
   
-  minReplicaCount: 3
-  maxReplicaCount: 20
+  minReplicaCount: 5
+  maxReplicaCount: 12
   
-  pollingInterval: 15  # Check metrics every 15s
-  cooldownPeriod: 300  # Wait 5 minutes before scaling down
+  pollingInterval: 10  # Check metrics every 10s (faster detection)
+  cooldownPeriod: 180  # Wait 3 minutes before scaling down
   
   advanced:
     horizontalPodAutoscalerConfig:
@@ -44,64 +44,46 @@ spec:
   # Triggers (OR semantics - scale if ANY trigger fires)
   triggers:
   
-  # Trigger 1: P95 Latency > 350ms
+  # Trigger 1: P95 Latency > 800ms
   - type: prometheus
     metadata:
-      serverAddress: http://prometheus-server.monitoring.svc.cluster.local:9090
-      metricName: http_request_duration_p95
+      serverAddress: http://prometheus-server.default.svc.cluster.local:80
+      metricName: inference_latency_p95
       query: |
         histogram_quantile(0.95,
-          sum by (pod) (
-            rate(http_request_duration_seconds_bucket{endpoint="/predict",pod=~"inference-.*"}[1m])
-          )
+          sum(rate(inference_latency_seconds_bucket[2m])) by (le)
         )
-      threshold: "0.350"  # 350ms in seconds
-      activationThreshold: "0.200"  # Start scaling above 200ms
-  
-  # Trigger 2: In-flight requests > 10 per pod
-  - type: prometheus
-    metadata:
-      serverAddress: http://prometheus-server.monitoring.svc.cluster.local:9090
-      metricName: http_requests_in_flight_avg
-      query: |
-        avg by (pod) (
-          http_requests_in_flight{endpoint="/predict",pod=~"inference-.*"}
-        )
-      threshold: "10"
-      activationThreshold: "5"
-  
-  # Trigger 3: CPU > 80% (backstop)
-  - type: cpu
-    metadataSpec:
-      type: Utilization
-      value: "80"
+      threshold: "0.8"  # 800ms in seconds
+      activationThreshold: "0.4"  # Start scaling above 400ms
 
 ---
 # Alternative: Simple Prometheus-based KEDA scaler (single metric)
-apiVersion: keda.sh/v1alpha1
-kind: ScaledObject
-metadata:
-  name: inference-latency-scaler
-  namespace: default
-spec:
-  scaleTargetRef:
-    name: inference
-  
-  minReplicaCount: 3
-  maxReplicaCount: 20
-  
-  pollingInterval: 15
-  cooldownPeriod: 300
-  
-  triggers:
-  - type: prometheus
-    metadata:
-      serverAddress: http://prometheus-server.monitoring.svc.cluster.local:9090
-      metricName: inference_p95_latency_ms
-      # P95 latency averaged across all pods
-      query: |
-        1000 * histogram_quantile(0.95,
-          sum(rate(http_request_duration_seconds_bucket{endpoint="/predict"}[1m])) by (le)
-        )
-      threshold: "350"  # 350ms
-      activationThreshold: "200"
+# This is a backup configuration - the main ScaledObject above is preferred
+# To use this instead, delete the inference-slo-scaler above and rename this one
+#
+# apiVersion: keda.sh/v1alpha1
+# kind: ScaledObject
+# metadata:
+#   name: inference-latency-scaler-simple
+#   namespace: default
+# spec:
+#   scaleTargetRef:
+#     name: inference
+#   
+#   minReplicaCount: 5
+#   maxReplicaCount: 10
+#   
+#   pollingInterval: 10
+#   cooldownPeriod: 180
+#   
+#   triggers:
+#   - type: prometheus
+#     metadata:
+#       serverAddress: http://prometheus-server.default.svc.cluster.local:9090
+#       metricName: inference_p95_latency
+#       query: |
+#         histogram_quantile(0.95,
+#           sum(rate(inference_latency_seconds_bucket[2m])) by (le)
+#         )
+#       threshold: "0.8"  # 800ms in seconds
+#       activationThreshold: "0.4"  # 400ms

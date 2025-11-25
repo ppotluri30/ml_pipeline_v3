@@ -81,6 +81,9 @@ class ProphetMultiFeatureModel(PythonModel):
         # Fit models sequentially to avoid Prophet stan_backend serialization issues
         for task in tasks:
             column, model = self._fit_feature(task)
+            # Prophet 1.1+ compatibility: Clear stan_backend to enable pickling
+            if hasattr(model, 'stan_backend'):
+                model.stan_backend = None
             self.models[column] = model
             print(f"Finished fitting model for: {column}")
 

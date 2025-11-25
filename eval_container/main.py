@@ -432,12 +432,15 @@ _ready = {"kafka": False, "mlflow": False}
 
 @app.get("/healthz")
 def healthz():
+    jlog("healthz_ok")
     return {"status": "ok"}
 
 @app.get("/readyz")
 def readyz():
     ready = all(_ready.values())
     code = 200 if ready else 503
+    if ready:
+        jlog("readyz_ok")
     return JSONResponse(status_code=code, content={"status": "ready" if ready else "not_ready", "components": _ready})
 
 def _init_readiness_checks():

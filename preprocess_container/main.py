@@ -214,9 +214,10 @@ def _log(event: str, **extra):
     base = {
         "service": "preprocess",
         "event": event,
+        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
     }
     base.update({k: v for k, v in extra.items() if v is not None})
-    print(json.dumps(base))
+    print(json.dumps(base), flush=True)
 
 
 app = FastAPI()
@@ -224,6 +225,7 @@ app = FastAPI()
 
 @app.get("/healthz")
 def healthz():
+    _log("healthz_ok")
     return {"status": "ok"}
 
 
@@ -237,6 +239,7 @@ def readyz():
         resp = requests.get(f"{gateway}/download/{input_bucket}/{train_file}", timeout=5)
         if resp.status_code != 200:
             return JSONResponse(status_code=503, content={"status": "degraded"})
+        _log("readyz_ok")
         return {"status": "ready"}
     except Exception as e:  # noqa: BLE001
         return JSONResponse(status_code=503, content={"status": "error", "detail": str(e)})

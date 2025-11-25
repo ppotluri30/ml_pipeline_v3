@@ -1,7 +1,7 @@
 # requirements.txt
 
-
-numpy==2.2.6
+# NumPy < 2.0 required for Prophet 1.1.5 compatibility
+numpy==1.26.4
 pandas==2.3.2
 pyarrow==20.0.0
 # Use slim mlflow client + pyfunc; avoid heavy extras that pull in large transitive builds
@@ -12,7 +12,9 @@ kafka-python[crc32c]==2.2.15
 numba==0.62.1
 statsforecast==2.0.2
 utilsforecast==0.2.12
-prophet==1.1.7
+# Prophet 1.1.5+ with cmdstanpy backend (no pystan)
+prophet==1.1.5
+cmdstanpy==1.2.2
 # Pin matplotlib to a recent wheel (needed indirectly by prophet for plots) to avoid backtracking to source build
 matplotlib==3.10.6
 boto3==1.34.162

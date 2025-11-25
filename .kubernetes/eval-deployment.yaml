@@ -26,6 +26,18 @@ spec:
           command: ['sh', '-c', 'echo Waiting for Kafka...; while ! nc -z kafka 9092; do sleep 1; done; echo Kafka is up!']
       containers:
         - env:
+            - name: AWS_ACCESS_KEY_ID
+              value: minioadmin
+            - name: AWS_SECRET_ACCESS_KEY
+              value: minioadmin
+            - name: AWS_S3_ADDRESSING_STYLE
+              value: path
+            - name: AWS_DEFAULT_REGION
+              value: us-east-1
+            - name: MLFLOW_S3_ENDPOINT_URL
+              value: http://minio:9000
+            - name: MLFLOW_TRACKING_URI
+              value: http://mlflow:5000
             - name: CONSUMER_GROUP_ID
               value: evaluator
             - name: CONSUMER_TOPIC_0

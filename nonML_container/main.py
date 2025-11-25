@@ -51,11 +51,16 @@ def estimate_season_length(td: pd.Timedelta) -> int:
     return 1
 
 def _jlog(event: str, **extra):
-    base = {"service": "nonml_train", "event": event}
+    from datetime import datetime, timezone
+    base = {
+        "service": "nonml_train",
+        "event": event,
+        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+    }
     for k, v in extra.items():
         if v is not None:
             base[k] = v
-    print(json.dumps(base))
+    print(json.dumps(base), flush=True)
 
 
 def callback(message):

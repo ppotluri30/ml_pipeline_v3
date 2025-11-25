@@ -9,8 +9,8 @@ metadata:
   name: inference
 spec:
   ports:
-    - name: "8022"
-      port: 8022
-      targetPort: 8022
+    - name: http
+      port: 8000
+      targetPort: 8000
   selector:
     io.kompose.service: inference

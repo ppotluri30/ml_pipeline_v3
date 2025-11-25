@@ -1,0 +1,1 @@
+{"status":"SUCCESS","identifier":"default","run_id":"5dc7766c6d784ce99ac028f124e20ba7","predictions":[{"ts":"2018-02-06T00:00:00","down":0.02320023626089096,"up":null,"rnti_count":null,"mcs_down":null,"mcs_down_var":null,"mcs_up":null,"mcs_up_var":null,"rb_down":null,"rb_down_var":null,"rb_up":null,"rb_up_var":null}],"req_id":"f1434649","cached":false}
