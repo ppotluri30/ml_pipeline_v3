@@ -61,10 +61,6 @@ data:
 
         if DEBUG_PAYLOAD:
             unique_count = len(set(ts_values))
-            sample = ts_values[:5]
-            print(
-                f"[LOCUST_PAYLOAD] seq={seq} rows={ROWS} unique={unique_count} sample={sample}"
-            )
             if unique_count != len(ts_values):
                 raise ValueError(f"Non-unique timestamps detected: seq={seq}")
 
@@ -101,9 +97,6 @@ data:
                 else:
                     sample = payload["data"]["ts"][:3]
                     response.failure(f"Unexpected status {status_code} sample_ts={sample}")
-
-                if DEBUG_PAYLOAD:
-                    print(f"[LOCUST_RESPONSE] seq={seq} status={status_code}")
 
 
     __all__ = ["InferenceUser"]

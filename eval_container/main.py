@@ -405,6 +405,35 @@ def process_training_message(msg_value: Dict[str, Any]):
         
         produce_message(producer, MODEL_SELECTED_TOPIC, payload, key="promotion")
         jlog("promotion_publish", run_id=payload["run_id"], config_hash=config_hash)
+        
+        # Trigger inference deployment rolling update via annotation patch
+        try:
+            from kubernetes import client, config as k8s_config
+            k8s_config.load_incluster_config()
+            apps_v1 = client.AppsV1Api()
+            promoted_at = payload["timestamp"]  # Already ISO format
+            patch_body = {
+                "spec": {
+                    "template": {
+                        "metadata": {
+                            "annotations": {
+                                "ml-pipeline/promoted-model-run-id": payload["run_id"],
+                                "ml-pipeline/promoted-at": promoted_at,
+                                "ml-pipeline/model-type": payload.get("model_type", "unknown"),
+                                "ml-pipeline/config-hash": config_hash
+                            }
+                        }
+                    }
+                }
+            }
+            apps_v1.patch_namespaced_deployment(
+                name="inference",
+                namespace="default",
+                body=patch_body
+            )
+            jlog("promotion_k8s_patch_success", deployment="inference", run_id=payload["run_id"], promoted_at=promoted_at)
+        except Exception as k8s_err:  # noqa: BLE001
+            jlog("promotion_k8s_patch_fail", error=str(k8s_err), run_id=payload.get("run_id"))
     except Exception as e:  # noqa: BLE001
         traceback.print_exc()
         jlog("promotion_error", error=str(e))

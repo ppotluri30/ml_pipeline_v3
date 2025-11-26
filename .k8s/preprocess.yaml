@@ -85,9 +85,9 @@ spec:
             - name: DATASET_NAME
               value: PobleSec
             - name: SAMPLE_TRAIN_ROWS
-              value: "50"
+              value: "0"
             - name: SAMPLE_TEST_ROWS
-              value: "50"
+              value: "0"
             - name: SAMPLE_STRATEGY
               value: head
             - name: SAMPLE_SEED

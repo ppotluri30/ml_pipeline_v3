@@ -8,3 +8,4 @@ python-dateutil==2.9.0
 requests==2.32.3
 fastapi==0.111.0
 uvicorn==0.30.0
+kubernetes==31.0.0

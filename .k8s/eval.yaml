@@ -15,6 +15,7 @@ spec:
       labels:
         app: eval
     spec:
+      serviceAccountName: eval-promoter
       containers:
         - name: eval
           image: eval:latest

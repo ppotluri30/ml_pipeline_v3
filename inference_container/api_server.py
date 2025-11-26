@@ -35,7 +35,6 @@ if _PROMETHEUS_AVAILABLE:
     WORKERS_IDLE = Gauge("inference_workers_idle", "Workers currently idle")
     WORKER_UTILIZATION = Gauge("inference_worker_utilization", "Busy worker ratio (0-1)")
     QUEUE_WAIT_LATEST = Gauge("inference_queue_wait_latest_seconds", "Queue wait time of the most recent job in seconds")
-    INFERENCE_DURATION_LATEST = Gauge("inference_latency_latest_seconds", "Duration of the most recent inference execution in seconds")
     QUEUE_OLDEST_WAIT = Gauge("inference_queue_oldest_wait_seconds", "Oldest queued job age in seconds")
     JOBS_PROCESSED = Counter("inference_jobs_processed_total", "Total processed jobs")
     JOB_OUTCOME = Counter("inference_jobs_outcome_total", "Total jobs by terminal outcome", ["outcome"])
@@ -44,10 +43,13 @@ if _PROMETHEUS_AVAILABLE:
         "Seconds jobs spent waiting in queue",
         buckets=[0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30],
     )
+    # SINGLE Prometheus histogram for KEDA latency-based autoscaling
+    # Buckets: 5ms to 5s, with +Inf automatically added by prometheus_client
+    # Records ONLY synchronous inference execution time (excludes async logging, Kafka, MinIO)
     INFERENCE_LATENCY = Histogram(
         "inference_latency_seconds",
-        "Seconds spent executing inference for a job",
-        buckets=[0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30],
+        "Synchronous inference execution latency in seconds (for KEDA autoscaling)",
+        buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0),
     )
     MODEL_READY = Gauge("inference_model_ready", "Whether model is ready (1=yes,0=no)")
 else:
@@ -72,7 +74,6 @@ else:
     WORKERS_IDLE = _NoopMetric()
     WORKER_UTILIZATION = _NoopMetric()
     QUEUE_WAIT_LATEST = _NoopMetric()
-    INFERENCE_DURATION_LATEST = _NoopMetric()
     QUEUE_OLDEST_WAIT = _NoopMetric()
     MODEL_READY = _NoopMetric()
     JOBS_PROCESSED = _NoopMetric()
@@ -368,7 +369,6 @@ def _queue_log(event: str, **extra):  # central helper for structured logs
     try:
         payload = {"service": "inference", "event": event, "source": "api"}
         payload.update(extra)
-        print(payload, flush=True)
     except Exception:
         pass
 
@@ -510,7 +510,6 @@ def _prepare_dataframe_for_inference(
             # Log raw timestamp values only in debug mode
             if _should_log_debug():
                 raw_values = df_tmp[candidate].head(5).tolist()
-                print(f"[TIMESTAMP_PARSE] Parsing column '{candidate}': sample={raw_values}")
                 trace_operation("before_to_datetime", func="_prepare_dataframe_for_inference", 
                               candidate=candidate, raw_sample=raw_values, total_rows=len(df_tmp))
             
@@ -520,14 +519,12 @@ def _prepare_dataframe_for_inference(
             if _should_log_debug():
                 parsed_sample = idx.head(5).tolist()
                 unique_count = idx.nunique()
-                print(f"[TIMESTAMP_PARSE] Parsed result: unique={unique_count}/{len(idx)} sample={parsed_sample}")
                 trace_operation("after_to_datetime", func="_prepare_dataframe_for_inference",
                               candidate=candidate, unique_count=int(unique_count), total=len(idx),
                               parsed_sample=[str(ts) for ts in parsed_sample])
         except Exception as e:
             if _should_log_debug():
-                print(f"[TIMESTAMP_PARSE] Failed to parse '{candidate}': {e}")
-            trace_error("_prepare_dataframe_for_inference", e, stage="to_datetime", candidate=candidate)
+                trace_error("_prepare_dataframe_for_inference", e, stage="to_datetime", candidate=candidate)
             continue
         if idx.isna().any():
             raise HTTPException(status_code=400, detail=f"Column '{candidate}' contains invalid timestamps")
@@ -604,6 +601,12 @@ def _current_model_snapshot() -> Dict[str, Any]:
 
 
 def _refresh_prometheus_metrics(duration_s: Optional[float] = None) -> None:
+    """Update Prometheus gauges and record histogram observation for inference latency.
+    
+    Args:
+        duration_s: Synchronous inference execution time in seconds (excludes async tasks).
+                    Recorded to INFERENCE_LATENCY histogram for KEDA autoscaling.
+    """
     if not _PROMETHEUS_AVAILABLE:
         return
     try:
@@ -620,9 +623,9 @@ def _refresh_prometheus_metrics(duration_s: Optional[float] = None) -> None:
         QUEUE_LEN.set(0)
         QUEUE_WAIT_LATEST.set(0.0)
         QUEUE_OLDEST_WAIT.set(0.0)
-        if duration_s is not None:
-            INFERENCE_LATENCY.observe(max(0.0, duration_s))
-            INFERENCE_DURATION_LATEST.set(max(0.0, duration_s))
+        # Record latency histogram observation (SINGLE source of truth for KEDA)
+        if duration_s is not None and duration_s > 0:
+            INFERENCE_LATENCY.observe(duration_s)
         try:
             inf = _get_inferencer()
             MODEL_READY.set(1 if getattr(inf, "current_model", None) is not None else 0)
