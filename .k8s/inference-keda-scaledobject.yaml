@@ -37,7 +37,9 @@ spec:
             periodSeconds: 120
           selectPolicy: Min
   triggers:
-  # Primary driver: p95 latency > 1.5s (aggressive threshold)
+  # Primary driver: p95 latency > 200ms (effective threshold after HPA per-pod division)
+  # NOTE: HPA divides external metrics by pod count. With minReplicas=5, threshold must be 200ms * 5 = 1000ms
+  # This ensures HPA sees: 1000ms / 5 pods = 200ms per pod, triggering at desired 200ms actual latency
   - type: prometheus
     metadata:
       serverAddress: http://prometheus-server.default.svc.cluster.local:80
@@ -46,8 +48,8 @@ spec:
         histogram_quantile(0.95, 
           sum(rate(inference_latency_seconds_bucket[2m])) by (le)
         )
-      threshold: "0.8"  # Scale if p95 > 0.8s (800ms) - production tuning
-      activationThreshold: "0.4"  # Activate if p95 > 0.4s (400ms) - pre-trigger
+      threshold: "1.0"  # Scale if p95 > 1.0s (HPA divides by 5 pods = 200ms effective threshold)
+      activationThreshold: "0.5"  # Activate if p95 > 0.5s (100ms effective after division)
   # Secondary driver: queue length > 20 jobs
   - type: prometheus
     metadata:
@@ -57,13 +59,4 @@ spec:
         avg(inference_queue_len)
       threshold: "20"
       activationThreshold: "10"
-  # Guardrail: CPU > 85% (prevent saturation)
-  - type: cpu
-    metricType: Utilization
-    metadata:
-      value: "85"
-  # Guardrail: Memory > 80% (prevent OOM)
-  - type: memory
-    metricType: Utilization
-    metadata:
-      value: "80"
+  # Note: CPU/Memory triggers temporarily disabled for load test (require resource requests)

@@ -53,11 +53,11 @@ spec:
               value: "1"
           resources:
             requests:
-              cpu: "500m"      # Reduced from 1 CPU (was causing Pending)
-              memory: "1Gi"    # Production standard - 1Gi baseline
+              cpu: "100m"      # Low baseline to avoid false autoscaling triggers
+              memory: "512Mi"  # Balanced memory for model and inference workload
             limits:
-              cpu: "2"         # Allow bursting to 2 CPUs (was 1)
-              memory: "1Gi"    # Match requests for stability
+              cpu: "2000m"     # Allow bursting to 2 CPUs under heavy load
+              memory: "1Gi"    # Sufficient limit without overcommitting node resources
           livenessProbe:
             httpGet:
               path: /healthz

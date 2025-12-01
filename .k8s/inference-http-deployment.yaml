@@ -1,0 +1,91 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: inference-http
+  labels:
+    app: inference-http
+    component: http-server
+spec:
+  replicas: 3  # Will be managed by HPA
+  selector:
+    matchLabels:
+      app: inference-http
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 2
+      maxUnavailable: 1
+  template:
+    metadata:
+      labels:
+        app: inference-http
+        component: http-server
+    spec:
+      terminationGracePeriodSeconds: 60  # Allow requests to complete
+      containers:
+        - name: inference-http
+          image: inference-http:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+              name: http
+              protocol: TCP
+          env:
+            - name: AWS_ACCESS_KEY_ID
+              value: minioadmin
+            - name: AWS_SECRET_ACCESS_KEY
+              value: minioadmin
+            - name: GATEWAY_URL
+              value: http://fastapi-app:8000
+            - name: MLFLOW_S3_ENDPOINT_URL
+              value: http://minio:9000
+            - name: MLFLOW_TRACKING_URI
+              value: http://mlflow:5000
+            - name: IDENTIFIER
+              value: default
+            - name: UVICORN_WORKERS
+              value: "2"
+            - name: UVICORN_TIMEOUT_KEEP_ALIVE
+              value: "60"
+            - name: UVICORN_LIMIT_CONCURRENCY
+              value: "1000"
+          resources:
+            requests:
+              cpu: "250m"      # Higher baseline for HTTP workload
+              memory: "512Mi"
+            limits:
+              cpu: "2000m"     # Allow bursting to 2 CPUs
+              memory: "1Gi"
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+      restartPolicy: Always
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: inference-http
+  labels:
+    app: inference-http
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8000
+      targetPort: 8000
+      protocol: TCP
+      name: http
+  selector:
+    app: inference-http

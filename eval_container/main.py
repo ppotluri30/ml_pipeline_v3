@@ -217,6 +217,7 @@ def process_training_message(msg_value: Dict[str, Any]):
     try:
         identifier = msg_value.get("identifier") or IDENTIFIER_FALLBACK
         config_hash = msg_value.get("config_hash")
+        pipeline_run_id = msg_value.get("pipeline_run_id")
         operation = msg_value.get("operation", "") or ""
         status = msg_value.get("status")
         # Only consider final success training messages
@@ -225,12 +226,16 @@ def process_training_message(msg_value: Dict[str, Any]):
             return
         model_type = operation.replace("Trained: ", "").strip()
         
-        # Use identifier as grouping key (fallback to "default" if missing)
-        # CACHING DISABLED: config_hash removed, using identifier for synchronization
-        sync_key = identifier if identifier else "default"
-        config_hash = sync_key  # Alias for logging compatibility
+        # CRITICAL: Use pipeline_run_id as sync key to ensure batch-scoped promotion
+        # This prevents promoting stale models from previous pipeline runs
+        if not pipeline_run_id:
+            jlog("promotion_abort", reason="missing_pipeline_run_id", model_type=model_type, identifier=identifier,
+                 error="Pipeline run ID is required - cannot promote without batch scope")
+            return
         
-        jlog("promotion_start", identifier=identifier, sync_key=sync_key, model_type=model_type)
+        sync_key = pipeline_run_id
+        
+        jlog("promotion_start", identifier=identifier, pipeline_run_id=pipeline_run_id, sync_key=sync_key, model_type=model_type, config_hash=config_hash)
         if sync_key not in _completion_tracker:
             _completion_tracker[sync_key] = set()
         if model_type:
@@ -241,8 +246,9 @@ def process_training_message(msg_value: Dict[str, Any]):
             return
         jlog("promotion_all_models_present", sync_key=sync_key, models=sorted(list(_completion_tracker[sync_key])))
         
-        # CACHING DISABLED: Search all recent runs (no config_hash filtering)
-        filter_string = None
+        # BATCH-SCOPED PROMOTION: Filter by pipeline_run_id tag to only consider runs from this pipeline execution
+        # This is the CRITICAL FIX that prevents promoting stale models from days ago
+        filter_string = f"tags.pipeline_run_id = '{pipeline_run_id}' and attributes.status = 'FINISHED'"
         # Expanded search: include ALL experiments so that heterogeneous model families (e.g. PROPHET in 'NonML' experiment
         # and GRU/LSTM in another) are all considered. Previously omission of experiment_ids could implicitly scope search
         # to an active/default experiment, excluding Prophet runs.
@@ -281,6 +287,8 @@ def process_training_message(msg_value: Dict[str, Any]):
             jlog("promotion_search_experiments", sync_key=sync_key, experiments=experiments_meta)
         except Exception:
             pass
+        jlog("promotion_search_filter", pipeline_run_id=pipeline_run_id, filter=filter_string, experiments=len(exp_ids))
+        
         attempt = 0
         missing_model_types: Set[str] = set()
         while True:
@@ -298,10 +306,12 @@ def process_training_message(msg_value: Dict[str, Any]):
                     attempt += 1
                     continue
                 if runs_df.empty:
-                    jlog("promotion_no_runs", config_hash=config_hash, attempts=attempt+1)
+                    jlog("promotion_hard_fail", pipeline_run_id=pipeline_run_id, config_hash=config_hash, attempts=attempt+1,
+                         error="CRITICAL: Zero candidate runs found for current pipeline execution - refusing to promote stale models",
+                         filter_used=filter_string)
                     return
                 else:
-                    jlog("promotion_partial_runs", config_hash=config_hash, present=list(present), still_missing=list(missing_model_types), attempts=attempt+1)
+                    jlog("promotion_partial_runs", pipeline_run_id=pipeline_run_id, config_hash=config_hash, present=list(present), still_missing=list(missing_model_types), attempts=attempt+1)
                     break
             break
         # DEBUG: emit all runs found prior to artifact filtering to diagnose missing model types (e.g. PROPHET)
@@ -376,8 +386,33 @@ def process_training_message(msg_value: Dict[str, Any]):
             jlog("promotion_artifact_filter_error", error=str(e))
         best = select_best(runs_df)
         if best is None:
-            jlog("promotion_no_selection", config_hash=config_hash)
+            jlog("promotion_no_selection", pipeline_run_id=pipeline_run_id, config_hash=config_hash)
             return
+        
+        # MONOTONIC PROMOTION INVARIANT: Verify winner is from current pipeline_run_id
+        winner_pipeline_run_id = best.get("tags.pipeline_run_id")
+        if winner_pipeline_run_id != pipeline_run_id:
+            jlog("promotion_invariant_violation", 
+                 error="CRITICAL: Winner run belongs to different pipeline execution - refusing to promote stale model",
+                 winner_run_id=best.get("run_id"),
+                 winner_pipeline_run_id=winner_pipeline_run_id,
+                 expected_pipeline_run_id=pipeline_run_id,
+                 filter_used=filter_string)
+            return
+        
+        # Verify winner has valid metrics (not NaN/inf)
+        winner_rmse = best.get("metrics.test_rmse")
+        winner_mae = best.get("metrics.test_mae")
+        if winner_rmse is None or winner_mae is None or pd.isna(winner_rmse) or pd.isna(winner_mae):
+            jlog("promotion_invalid_metrics",
+                 error="CRITICAL: Winner run has missing or invalid metrics",
+                 winner_run_id=best.get("run_id"),
+                 rmse=winner_rmse,
+                 mae=winner_mae)
+            return
+        
+        jlog("promotion_invariants_validated", winner_run_id=best.get("run_id"), pipeline_run_id=pipeline_run_id)
+        
         payload = promotion_payload(best, identifier, config_hash)
         jlog("promotion_decision", **payload)
         ts = payload["timestamp"].replace(":", "-")
@@ -406,34 +441,11 @@ def process_training_message(msg_value: Dict[str, Any]):
         produce_message(producer, MODEL_SELECTED_TOPIC, payload, key="promotion")
         jlog("promotion_publish", run_id=payload["run_id"], config_hash=config_hash)
         
-        # Trigger inference deployment rolling update via annotation patch
-        try:
-            from kubernetes import client, config as k8s_config
-            k8s_config.load_incluster_config()
-            apps_v1 = client.AppsV1Api()
-            promoted_at = payload["timestamp"]  # Already ISO format
-            patch_body = {
-                "spec": {
-                    "template": {
-                        "metadata": {
-                            "annotations": {
-                                "ml-pipeline/promoted-model-run-id": payload["run_id"],
-                                "ml-pipeline/promoted-at": promoted_at,
-                                "ml-pipeline/model-type": payload.get("model_type", "unknown"),
-                                "ml-pipeline/config-hash": config_hash
-                            }
-                        }
-                    }
-                }
-            }
-            apps_v1.patch_namespaced_deployment(
-                name="inference",
-                namespace="default",
-                body=patch_body
-            )
-            jlog("promotion_k8s_patch_success", deployment="inference", run_id=payload["run_id"], promoted_at=promoted_at)
-        except Exception as k8s_err:  # noqa: BLE001
-            jlog("promotion_k8s_patch_fail", error=str(k8s_err), run_id=payload.get("run_id"))
+        # NO K8S DEPLOYMENT PATCH NEEDED - Inference auto-reloads models
+        # Worker writes current.json → Inference detects change → Auto-reload happens
+        # No pod restarts, no rollouts, no manual intervention
+        jlog("promotion_auto_reload_enabled", 
+             info="Inference-http will auto-detect current.json change and reload model in-memory")
     except Exception as e:  # noqa: BLE001
         traceback.print_exc()
         jlog("promotion_error", error=str(e))

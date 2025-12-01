@@ -168,6 +168,7 @@ def _train_parquet(df: pd.DataFrame, meta: Dict[str, Any]):
     experiment_name = env_var("EXPERIMENT_NAME", "Default")
     CONFIG_HASH = meta.get("config_hash")
     PREPROCESS_CONFIG = meta.get("preprocess_config")
+    PIPELINE_RUN_ID = meta.get("pipeline_run_id")  # Unique ID for this pipeline execution
 
     # Window / model parameters (defer feature counting until after ensuring target column)
     INPUT_SEQ_LEN = int(env_var("INPUT_SEQ_LEN"))
@@ -296,6 +297,11 @@ def _train_parquet(df: pd.DataFrame, meta: Dict[str, Any]):
             CONFIG_HASH = os.environ.get("DEFAULT_CONFIG_HASH", "default_cfg")
             mlflow.log_param("config_hash", CONFIG_HASH)
             _jlog("config_hash_defaulted", run_id=run_id, model_type=MODEL_TYPE, config_hash=CONFIG_HASH)
+        if PIPELINE_RUN_ID:
+            mlflow.set_tag("pipeline_run_id", PIPELINE_RUN_ID)
+            _jlog("pipeline_run_id_tagged", run_id=run_id, model_type=MODEL_TYPE, pipeline_run_id=PIPELINE_RUN_ID)
+        else:
+            _jlog("pipeline_run_id_missing", run_id=run_id, model_type=MODEL_TYPE, warning="No pipeline_run_id in metadata - eval may consider old runs")
         if PREPROCESS_CONFIG:
             mlflow.log_text(json.dumps(PREPROCESS_CONFIG, sort_keys=True), "preprocess/preprocess_config.json")
         identifier = os.environ.get("IDENTIFIER")
@@ -370,6 +376,8 @@ def _train_parquet(df: pd.DataFrame, meta: Dict[str, Any]):
                 "experiment": experiment_name,
                 "run_name": MODEL_TYPE,
                 "run_id": run_id,
+                "pipeline_run_id": PIPELINE_RUN_ID,
+                "config_hash": CONFIG_HASH,
             }
             produce_message(producer, os.environ.get("PRODUCER_TOPIC") or "model-training", success_payload, key=f"trained-{MODEL_TYPE}")
             _jlog("train_success_publish", run_id=run_id, model_type=MODEL_TYPE, config_hash=CONFIG_HASH)
@@ -429,7 +437,10 @@ def message_handler():
                 df = table.to_pandas()
                 schema = pq.read_schema(parquet_bytes)
                 meta = _extract_meta(schema)
-                _jlog("download_done", rows=len(df), cols=len(df.columns), config_hash=meta.get('config_hash'))
+                # Extract pipeline_run_id from claim message (not just Parquet metadata)
+                if "pipeline_run_id" in claim:
+                    meta["pipeline_run_id"] = claim["pipeline_run_id"]
+                _jlog("download_done", rows=len(df), cols=len(df.columns), config_hash=meta.get('config_hash'), pipeline_run_id=meta.get('pipeline_run_id'))
             except Exception as e:  # noqa: BLE001
                 _jlog("download_fail", error=str(e), object_key=object_key)
                 _commit(consumer, msg)

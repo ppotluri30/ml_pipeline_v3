@@ -1,0 +1,44 @@
+# syntax=docker/dockerfile:1
+# HTTP-only inference service
+# Serves FastAPI /predict endpoint without Kafka consumers
+
+ARG PYTHON_VERSION=3.11.4
+FROM python:${PYTHON_VERSION}-slim AS base
+RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
+ENV GIT_PYTHON_REFRESH=quiet
+
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+ARG UID=10001
+RUN adduser \
+    --disabled-password \
+    --gecos "" \
+    --home "/nonexistent" \
+    --shell "/sbin/nologin" \
+    --no-create-home \
+    --uid "${UID}" \
+    appuser
+
+# Install dependencies
+RUN --mount=type=cache,target=/root/.cache/pip \
+    --mount=type=bind,source=inference_container/requirements.txt,target=requirements.txt \
+    python -m pip install -r requirements.txt
+
+USER appuser
+
+COPY inference_container/ .
+COPY shared/ /app/shared/
+
+EXPOSE 8000
+
+# HTTP-only configuration
+ENV UVICORN_WORKERS=2 \
+    UVICORN_TIMEOUT_KEEP_ALIVE=60 \
+    UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN=30 \
+    UVICORN_LIMIT_CONCURRENCY=1000
+
+# Entrypoint: HTTP-only inference server
+CMD ["python", "inference_http.py"]

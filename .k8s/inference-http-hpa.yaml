@@ -1,0 +1,42 @@
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: inference-http-hpa
+  labels:
+    app: inference-http
+    autoscaling-strategy: cpu-based
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: inference-http
+  minReplicas: 2  # Reduced minimum for HTTP-only workload
+  maxReplicas: 12  # Increased maximum for scaling capacity
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70  # Standard CPU target without Kafka overhead
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 30
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 15
+        - type: Percent
+          value: 50
+          periodSeconds: 15
+      selectPolicy: Max
+    scaleDown:
+      stabilizationWindowSeconds: 180  # 3-minute cooldown
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 45
+        - type: Percent
+          value: 15
+          periodSeconds: 90
+      selectPolicy: Min

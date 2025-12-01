@@ -372,7 +372,7 @@ def run_preprocess() -> None:
             produce_message(
                 producer,
                 topic_train,
-                {"bucket": out_bucket, "object": train_obj, "size": len(train_bytes), "v": 1, "identifier": identifier},
+                {"bucket": out_bucket, "object": train_obj, "size": len(train_bytes), "v": 1, "identifier": identifier, "pipeline_run_id": created_at, "config_hash": config_hash},
                 key="train-claim",
             )
             produce_message(

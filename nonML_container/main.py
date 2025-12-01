@@ -125,11 +125,14 @@ def message_handler():
                 df = table.to_pandas()
                 schema = pq.read_schema(parquet_bytes)
                 md = _extract_meta(schema)
+                # Extract pipeline_run_id from claim message (not just Parquet metadata)
+                if "pipeline_run_id" in claim:
+                    md["pipeline_run_id"] = claim["pipeline_run_id"]
                 scaler = md.get('scaler_object')
                 if TRIMS:
                     scaler = subset_scaler(scaler, df.columns.to_list(), TRIMS) if scaler else None
                     df.drop(columns=df.columns.difference(TRIMS + TIME_FEATURES), inplace=True)
-                _jlog("download_done", rows=len(df), cols=len(df.columns), config_hash=md.get('config_hash'))
+                _jlog("download_done", rows=len(df), cols=len(df.columns), config_hash=md.get('config_hash'), pipeline_run_id=md.get('pipeline_run_id'))
                 
                 # Prophet requires DatetimeIndex - ensure timestamp is set as index
                 if 'timestamp' in df.columns and not isinstance(df.index, pd.DatetimeIndex):
@@ -197,11 +200,16 @@ def main(df: pd.DataFrame, scaler, experiment_name: str = "NonML", preprocess_me
 
     with mlflow.start_run(run_name=run_name, log_system_metrics=True) as run:
         CONFIG_HASH = None
+        PIPELINE_RUN_ID = None
         if preprocess_meta:
             CONFIG_HASH = preprocess_meta.get('config_hash')
             PREPROCESS_CONFIG = preprocess_meta.get('preprocess_config')
+            PIPELINE_RUN_ID = preprocess_meta.get('pipeline_run_id')
             if CONFIG_HASH:
                 mlflow.log_param("config_hash", CONFIG_HASH)
+            if PIPELINE_RUN_ID:
+                mlflow.set_tag("pipeline_run_id", PIPELINE_RUN_ID)
+                _jlog("pipeline_run_id_tagged", run_id=run.info.run_id, model_type=MODEL_TYPE, pipeline_run_id=PIPELINE_RUN_ID)
             if PREPROCESS_CONFIG:
                 mlflow.log_text(json.dumps(PREPROCESS_CONFIG, sort_keys=True), "preprocess/preprocess_config.json")
         # DEBUG/Redundant: ensure config_hash is always set as a param even if above block skipped
@@ -436,8 +444,10 @@ def main(df: pd.DataFrame, scaler, experiment_name: str = "NonML", preprocess_me
                 "operation": f"Trained: {MODEL_TYPE}",
                 "status": "SUCCESS",
                 "experiment": experiment_name,
-                "run_name": run_name,
+                "run_name": MODEL_TYPE,
                 "run_id": run.info.run_id,
+                "pipeline_run_id": PIPELINE_RUN_ID,
+                "config_hash": CONFIG_HASH,
             }
             produce_message(producer, topic, success_payload, key=f"trained-{MODEL_TYPE}")
             _jlog("train_success_publish", run_id=run.info.run_id, model_type=MODEL_TYPE, config_hash=CONFIG_HASH)

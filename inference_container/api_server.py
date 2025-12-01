@@ -682,12 +682,17 @@ def ready():
     return Response(content=json.dumps({"status": "not_ready"}), media_type="application/json", status_code=503)
 
 def _get_inferencer():
-    # Import the shared Inferencer instance from main without triggering
-    # main's runtime start side-effects. main._start_runtime is scheduled
-    # from the FastAPI startup handler below to ensure the webserver binds
-    # immediately and model-loading happens in background.
-    from main import inferencer  # type: ignore
-    return inferencer
+    # Import the shared Inferencer instance from either inference_http (HTTP-only mode)
+    # or main (legacy Kafka+HTTP mode). HTTP-only mode is detected via absence of
+    # Kafka environment variables or explicit flag.
+    try:
+        # Try HTTP-only mode first (preferred for separated architecture)
+        from inference_http import inferencer  # type: ignore
+        return inferencer
+    except ImportError:
+        # Fallback to legacy main.py (Kafka+HTTP combined mode)
+        from main import inferencer  # type: ignore
+        return inferencer
 
 async def _prewarm_if_needed():  # pragma: no cover (performance side-effect)
     if not PREWARM_ENABLED:

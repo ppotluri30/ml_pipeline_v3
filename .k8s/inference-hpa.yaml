@@ -4,38 +4,39 @@ metadata:
   name: inference-hpa
   labels:
     app: inference
+    autoscaling-strategy: cpu-based
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
     name: inference
-  minReplicas: 2
-  maxReplicas: 12
+  minReplicas: 3  # Baseline for production availability (minimum to handle partition count)
+  maxReplicas: 8  # Balanced for node capacity (1 CPU × 8 pods = 8 CPUs)
   metrics:
     - type: Resource
       resource:
         name: cpu
         target:
           type: Utilization
-          averageUtilization: 85  # Aggressive: scale up when CPU > 85%
+          averageUtilization: 250  # Scale when CPU > 250% (matches baseline idle ~238m on 100m request)
   behavior:
     scaleUp:
-      stabilizationWindowSeconds: 0  # Immediate reaction to load spikes
+      stabilizationWindowSeconds: 30  # Brief stabilization to avoid flapping
       policies:
         - type: Pods
-          value: 3  # Add 3 pods quickly
+          value: 2  # Add 2 pods per cycle
           periodSeconds: 15
         - type: Percent
-          value: 100  # Or double capacity
+          value: 50  # Or add 50% of current pods
           periodSeconds: 15
-      selectPolicy: Max  # Choose most aggressive policy
+      selectPolicy: Max  # Choose most aggressive scale-up policy
     scaleDown:
-      stabilizationWindowSeconds: 180  # Wait 3 minutes before scaling down
+      stabilizationWindowSeconds: 180  # 3-minute cooldown (reduced from 5min for faster response)
       policies:
         - type: Pods
           value: 1  # Remove 1 pod at a time
-          periodSeconds: 120  # Every 2 minutes
+          periodSeconds: 45  # Faster scale-down cycles (was 60s)
         - type: Percent
-          value: 25  # Or remove 25% of pods
-          periodSeconds: 120
-      selectPolicy: Min  # Choose most conservative policy
+          value: 15  # Or remove 15% of current pods (was 10%)
+          periodSeconds: 90  # Faster evaluation (was 120s)
+      selectPolicy: Min  # Choose most conservative scale-down policy

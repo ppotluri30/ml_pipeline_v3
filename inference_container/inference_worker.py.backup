@@ -1,0 +1,261 @@
+"""
+Kafka-only worker entrypoint.
+
+Consumes from Kafka topics (inference-data, model-training, model-selected).
+NO HTTP server (except optional basic /healthz).
+NO ONNX inference - delegates to HTTP inference service.
+Handles model promotion events by updating current.json pointer.
+"""
+import os
+import sys
+import time
+import queue
+import threading
+import json as _json
+
+# Ensure inference module utilities are available
+sys.path.insert(0, os.path.dirname(__file__))
+
+from kafka_utils import (
+    create_producer,
+    create_consumer_configurable,
+    publish_error,
+    commit_offsets_sync,
+)
+from client_utils import post_file
+from inferencer import Inferencer
+
+
+def _log(event: str, **kwargs):
+    """Structured logging helper."""
+    log_entry = {"service": "inference_worker", "event": event}
+    log_entry.update(kwargs)
+    print(_json.dumps(log_entry))
+
+
+def _handle_promotion_message(message, producer):
+    """
+    Handle model-selected (promotion) messages.
+    Updates the current.json pointer via the gateway API.
+    """
+    try:
+        # Extract promotion data
+        raw_value = message.value
+        if isinstance(raw_value, bytes):
+            raw_value = raw_value.decode('utf-8', errors='ignore')
+        
+        data = _json.loads(raw_value)
+        
+        run_id = data.get("run_id")
+        model_uri = data.get("model_uri")
+        model_type = data.get("model_type")
+        config_hash = data.get("config_hash", "default")
+        identifier = data.get("identifier", os.environ.get("IDENTIFIER", "default"))
+        
+        if not run_id or not model_uri:
+            _log("promotion_message_invalid", data=data)
+            return
+        
+        _log("promotion_message_received", run_id=run_id, model_type=model_type, 
+             config_hash=config_hash, identifier=identifier)
+        
+        # Build pointer document
+        pointer = {
+            "run_id": run_id,
+            "model_uri": model_uri,
+            "model_type": model_type,
+            "config_hash": config_hash,
+            "identifier": identifier,
+            "promoted_at": data.get("timestamp", time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())),
+        }
+        
+        # Write pointer to root location (current.json)
+        GATEWAY_URL = os.environ.get("GATEWAY_URL", "http://fastapi-app:8000")
+        pointer_path = "model-promotion/current.json"
+        
+        try:
+            pointer_json = _json.dumps(pointer)
+            url = f"{GATEWAY_URL}/upload/{pointer_path}"
+            
+            response = post_file(url, pointer_json.encode('utf-8'))
+            _log("promotion_pointer_written", path=pointer_path, run_id=run_id, 
+                 response=response.get("status") if isinstance(response, dict) else str(response))
+        except Exception as write_err:
+            _log("promotion_pointer_write_fail", path=pointer_path, error=str(write_err))
+            raise
+        
+        _log("promotion_event_processed", run_id=run_id, model_type=model_type)
+        
+    except Exception as e:
+        _log("promotion_handler_error", error=str(e))
+        # Publish to DLQ
+        try:
+            dlq_topic = f"DLQ-model-selected"
+            error_message = {
+                "error": str(e),
+                "original_message": str(message.value),
+                "topic": message.topic,
+                "partition": message.partition,
+                "offset": message.offset,
+            }
+            publish_error(producer, dlq_topic, error_message)
+        except Exception as dlq_err:
+            _log("dlq_publish_fail", error=str(dlq_err))
+
+
+def _handle_inference_data_message(message, producer):
+    """
+    Handle inference-data messages.
+    These would typically trigger batch inference - for now, just log.
+    """
+    try:
+        _log("inference_data_received", topic=message.topic, partition=message.partition, 
+             offset=message.offset)
+        # TODO: Implement batch inference delegation to HTTP service if needed
+    except Exception as e:
+        _log("inference_data_handler_error", error=str(e))
+
+
+def _handle_model_training_message(message, producer):
+    """
+    Handle model-training messages.
+    These are informational about completed training - log for monitoring.
+    """
+    try:
+        raw_value = message.value
+        if isinstance(raw_value, bytes):
+            raw_value = raw_value.decode('utf-8', errors='ignore')
+        
+        data = _json.loads(raw_value)
+        _log("model_training_notification", run_id=data.get("run_id"), 
+             model_type=data.get("model_type"), status=data.get("status"))
+    except Exception as e:
+        _log("model_training_handler_error", error=str(e))
+
+
+def _consumer_loop(topic_name: str, handler_func, producer, consumer_group_id: str):
+    """
+    Generic Kafka consumer loop with manual commit support.
+    """
+    USE_MANUAL_COMMIT = os.environ.get("USE_MANUAL_COMMIT", "true").lower() in {"1", "true", "yes"}
+    FETCH_MAX_WAIT_MS = int(os.environ.get("FETCH_MAX_WAIT_MS", "50"))
+    MAX_POLL_RECORDS = int(os.environ.get("MAX_POLL_RECORDS", "64"))
+    
+    consumer = create_consumer_configurable(
+        topic_name, 
+        consumer_group_id, 
+        enable_auto_commit=not USE_MANUAL_COMMIT
+    )
+    
+    _log("consumer_loop_start", topic=topic_name, group=consumer_group_id, 
+         manual_commit=USE_MANUAL_COMMIT)
+    
+    try:
+        while True:
+            records = consumer.poll(timeout_ms=FETCH_MAX_WAIT_MS, max_records=MAX_POLL_RECORDS)
+            
+            if not records:
+                time.sleep(0.1)
+                continue
+            
+            # Process messages
+            for tp, messages in records.items():
+                for msg in messages:
+                    try:
+                        handler_func(msg, producer)
+                    except Exception as handler_err:
+                        _log("message_handler_error", topic=topic_name, error=str(handler_err))
+            
+            # Commit offsets if manual commit enabled
+            if USE_MANUAL_COMMIT:
+                try:
+                    consumer.commit()
+                    _log("offsets_committed", topic=topic_name, 
+                         message_count=sum(len(msgs) for msgs in records.values()))
+                except Exception as commit_err:
+                    _log("commit_error", topic=topic_name, error=str(commit_err))
+    
+    except Exception as e:
+        _log("consumer_loop_error", topic=topic_name, error=str(e))
+    finally:
+        try:
+            consumer.close()
+        except:
+            pass
+
+
+def start_kafka_worker():
+    """Start Kafka consumer workers for all relevant topics."""
+    _log("kafka_worker_starting")
+    
+    # Kafka configuration
+    CONSUMER_GROUP_ID = os.environ.get("CONSUMER_GROUP_ID", "inference-worker")
+    INFERENCE_DATA_TOPIC = os.environ.get("CONSUMER_TOPIC_0", "inference-data")
+    MODEL_TRAINING_TOPIC = os.environ.get("CONSUMER_TOPIC_1", "model-training")
+    PROMOTION_TOPIC = os.environ.get("PROMOTION_TOPIC", "model-selected")
+    
+    # Create Kafka producer for DLQ and output
+    producer = create_producer()
+    _log("kafka_producer_created")
+    
+    # Start consumer threads
+    threads = []
+    
+    # Consumer for model-selected (promotion) - PRIORITY
+    promotion_thread = threading.Thread(
+        target=_consumer_loop,
+        args=(PROMOTION_TOPIC, _handle_promotion_message, producer, CONSUMER_GROUP_ID),
+        daemon=True,
+        name="promotion-consumer"
+    )
+    promotion_thread.start()
+    threads.append(promotion_thread)
+    _log("consumer_started", topic=PROMOTION_TOPIC)
+    
+    # Consumer for model-training (notifications)
+    training_thread = threading.Thread(
+        target=_consumer_loop,
+        args=(MODEL_TRAINING_TOPIC, _handle_model_training_message, producer, CONSUMER_GROUP_ID),
+        daemon=True,
+        name="training-consumer"
+    )
+    training_thread.start()
+    threads.append(training_thread)
+    _log("consumer_started", topic=MODEL_TRAINING_TOPIC)
+    
+    # Consumer for inference-data (batch inference requests)
+    inference_thread = threading.Thread(
+        target=_consumer_loop,
+        args=(INFERENCE_DATA_TOPIC, _handle_inference_data_message, producer, CONSUMER_GROUP_ID),
+        daemon=True,
+        name="inference-consumer"
+    )
+    inference_thread.start()
+    threads.append(inference_thread)
+    _log("consumer_started", topic=INFERENCE_DATA_TOPIC)
+    
+    _log("kafka_worker_ready", topics=[PROMOTION_TOPIC, MODEL_TRAINING_TOPIC, INFERENCE_DATA_TOPIC])
+    
+    # Keep main thread alive
+    try:
+        while True:
+            time.sleep(1)
+            # Check if any thread died
+            for t in threads:
+                if not t.is_alive():
+                    _log("consumer_thread_died", thread=t.name)
+    except KeyboardInterrupt:
+        _log("kafka_worker_stopped", reason="user_interrupt")
+    finally:
+        try:
+            producer.close()
+        except:
+            pass
+
+
+if __name__ == "__main__":
+    try:
+        start_kafka_worker()
+    except Exception as e:
+        _log("kafka_worker_fatal_error", error=str(e))
+        raise
