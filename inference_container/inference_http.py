@@ -17,6 +17,138 @@ sys.path.insert(0, os.path.dirname(__file__))
 from inferencer import Inferencer
 from client_utils import get_file
 
+
+def _convert_model_to_onnx(service: Inferencer, run_id: str) -> None:
+    """Convert PyTorch model to ONNX Runtime for faster inference."""
+    import os
+    
+    _ENABLE_ONNX = os.environ.get("INFERENCE_ENABLE_ONNX", "1").lower() in {"1", "true", "yes"}
+    if not _ENABLE_ONNX:
+        _log("onnx_disabled_by_env", run_id=run_id)
+        return
+    
+    model = service.current_model
+    if model is None or not hasattr(model, "_model_impl"):
+        _log("onnx_skip_no_model_impl", run_id=run_id)
+        return
+    
+    try:
+        import torch
+        import tempfile
+        import hashlib
+        
+        # Try importing onnxruntime and onnx
+        try:
+            import onnxruntime as ort
+            import onnx
+        except ImportError as ie:
+            _log("onnx_skip_not_installed", run_id=run_id, error=str(ie))
+            return
+        
+        # Extract PyTorch model from MLflow wrapper
+        inner_model = None
+        
+        # Path 1: model._model_impl.pytorch_model (MLflow PyTorch flavor)
+        if hasattr(model._model_impl, "pytorch_model"):
+            inner_model = model._model_impl.pytorch_model
+        # Path 2: model._model_impl.python_model.model (custom wrapper)
+        elif hasattr(model._model_impl, "python_model") and hasattr(model._model_impl.python_model, "model"):
+            inner_model = model._model_impl.python_model.model
+        # Path 3: Direct access
+        elif hasattr(model._model_impl, "model"):
+            inner_model = model._model_impl.model
+        
+        if inner_model is None or not hasattr(inner_model, "eval"):
+            _log("onnx_skip_no_pytorch_model", run_id=run_id, 
+                 has_model_impl=hasattr(model, "_model_impl"),
+                 impl_attrs=dir(model._model_impl) if hasattr(model, "_model_impl") else [])
+            return
+        
+        inner_model.eval()
+        
+        # Create cache path based on run_id
+        cache_dir = os.path.join(tempfile.gettempdir(), "onnx_cache")
+        os.makedirs(cache_dir, exist_ok=True)
+        
+        model_str = str(inner_model)
+        cache_key = hashlib.md5(f"{run_id}_{model_str}".encode()).hexdigest()[:16]
+        onnx_cache_path = os.path.join(cache_dir, f"{cache_key}.onnx")
+        
+        # Check if ONNX model already exists and is valid
+        if os.path.exists(onnx_cache_path):
+            try:
+                onnx_model = onnx.load(onnx_cache_path)
+                onnx.checker.check_model(onnx_model)
+                
+                # Load into ONNX Runtime with optimized settings
+                sess_options = ort.SessionOptions()
+                sess_options.intra_op_num_threads = 2
+                sess_options.inter_op_num_threads = 2
+                sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+                
+                service.onnx_session = ort.InferenceSession(onnx_cache_path, sess_options)
+                service.onnx_cache_path = onnx_cache_path
+                service.model_backend = "onnx"
+                
+                _log("onnx_loaded_from_cache", run_id=run_id, cache_path=onnx_cache_path)
+                return
+            except Exception as cache_err:
+                _log("onnx_cache_invalid_regenerating", run_id=run_id, error=str(cache_err)[:200])
+                try:
+                    os.unlink(onnx_cache_path)
+                except Exception:
+                    pass
+        
+        # Create dummy input for export
+        input_seq_len = service.input_seq_len or 10
+        feature_dim = 1
+        try:
+            if hasattr(inner_model, "lstm") and hasattr(inner_model.lstm, "input_size"):
+                feature_dim = inner_model.lstm.input_size
+            elif hasattr(inner_model, "gru") and hasattr(inner_model.gru, "input_size"):
+                feature_dim = inner_model.gru.input_size
+            elif hasattr(inner_model, "rnn") and hasattr(inner_model.rnn, "input_size"):
+                feature_dim = inner_model.rnn.input_size
+        except Exception:
+            pass
+        
+        dummy_input = torch.randn(1, input_seq_len, feature_dim)
+        
+        # Export to ONNX
+        torch.onnx.export(
+            inner_model,
+            dummy_input,
+            onnx_cache_path,
+            export_params=True,
+            opset_version=14,
+            do_constant_folding=True,
+            input_names=["input"],
+            output_names=["output"],
+            dynamic_axes={"input": {0: "batch", 1: "seq_len"}, "output": {0: "batch", 1: "seq_len"}}
+        )
+        
+        # Validate exported ONNX model
+        onnx_model = onnx.load(onnx_cache_path)
+        onnx.checker.check_model(onnx_model)
+        
+        # Load into ONNX Runtime with optimized settings
+        sess_options = ort.SessionOptions()
+        sess_options.intra_op_num_threads = 2
+        sess_options.inter_op_num_threads = 2
+        sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        
+        service.onnx_session = ort.InferenceSession(onnx_cache_path, sess_options)
+        service.onnx_cache_path = onnx_cache_path
+        service.model_backend = "onnx"
+        
+        _log("onnx_export_success", run_id=run_id, model_type=service.model_type, 
+             input_shape=[1, input_seq_len, feature_dim], cache_path=onnx_cache_path)
+    except Exception as onnx_err:
+        service.onnx_session = None
+        service.model_backend = "pytorch"
+        _log("onnx_conversion_failed", run_id=run_id, error=str(onnx_err)[:300])
+
+
 # Environment variables
 GATEWAY_URL = os.environ.get("GATEWAY_URL", "http://fastapi-app:8000")
 MLFLOW_TRACKING_URI = os.environ.get("MLFLOW_TRACKING_URI", "http://mlflow:5000")
@@ -168,6 +300,13 @@ def _load_promoted_pointer(service: Inferencer) -> bool:
                      input_seq_len=service.input_seq_len, output_seq_len=service.output_seq_len)
             except Exception as enrich_err:
                 _log("promotion_model_enrich_fail", run_id=run_id, error=str(enrich_err))
+            
+            # Convert PyTorch model to ONNX for faster inference
+            if service.model_class == 'pytorch':
+                try:
+                    _convert_model_to_onnx(service, run_id)
+                except Exception as onnx_err:
+                    _log("onnx_conversion_error", run_id=run_id, error=str(onnx_err)[:200])
             
             # Load scaler artifact (required for PyTorch models to inverse transform predictions)
             try:
@@ -331,23 +470,25 @@ _log("auto_reload_enabled", check_interval_seconds=_reload_check_interval)
 
 
 if __name__ == "__main__":
-    # Import FastAPI app (it will use our global inferencer instance)
-    from api_server import app
-    
-    # Start Uvicorn server
+    # Start Uvicorn server (uses string path for multiprocess workers)
     import uvicorn
     
-    UVICORN_TIMEOUT_KEEP_ALIVE = int(os.environ.get("UVICORN_TIMEOUT_KEEP_ALIVE", "60"))
-    UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN = int(os.environ.get("UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN", "30"))
-    UVICORN_LIMIT_CONCURRENCY = int(os.environ.get("UVICORN_LIMIT_CONCURRENCY", "1000"))
+    UVICORN_TIMEOUT_KEEP_ALIVE = int(os.environ.get("UVICORN_TIMEOUT_KEEP_ALIVE", "30"))
+    UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN = int(os.environ.get("UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN", "15"))
+    UVICORN_LIMIT_CONCURRENCY = int(os.environ.get("UVICORN_LIMIT_CONCURRENCY", "100"))
+    UVICORN_WORKERS = int(os.environ.get("UVICORN_WORKERS", "2"))
+    UVICORN_TIMEOUT = int(os.environ.get("UVICORN_TIMEOUT", "30"))  # Server-side request timeout
     
-    _log("http_server_ready", workers=1, port=8000)
+    _log("http_server_ready", workers=UVICORN_WORKERS, port=8000, 
+         timeout_keep_alive=UVICORN_TIMEOUT_KEEP_ALIVE, limit_concurrency=UVICORN_LIMIT_CONCURRENCY,
+         onnx_enabled=inferencer.onnx_session is not None, model_backend=getattr(inferencer, 'model_backend', 'unknown'))
     
     try:
         uvicorn.run(
-            app,
+            "api_server:app",
             host="0.0.0.0",
             port=8000,
+            workers=UVICORN_WORKERS,
             timeout_keep_alive=UVICORN_TIMEOUT_KEEP_ALIVE,
             timeout_graceful_shutdown=UVICORN_TIMEOUT_GRACEFUL_SHUTDOWN,
             limit_concurrency=UVICORN_LIMIT_CONCURRENCY,

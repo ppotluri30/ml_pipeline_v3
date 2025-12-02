@@ -140,12 +140,12 @@ grafana:
 # Disable Locust for now (locustfile not mounted issue)
 locust:
   enabled: false
-  targetHost: "inference"  # Target inference service directly
+  targetHost: "inference-http"  # Fixed: use inference-http service name
   targetPort: 8000  # Inference app port (not HAProxy)
   master:
     env:
-      predictUrl: "http://inference:8000/predict"
-      targetHost: "http://inference:8000"
+      predictUrl: "http://inference-http:8000/predict"
+      targetHost: "http://inference-http:8000"
   worker:
     replicas: 2  # Fewer workers for dev
 

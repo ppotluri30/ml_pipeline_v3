@@ -518,7 +518,7 @@ grafana:
 # instead of HAProxy inference-lb
 locust:
   enabled: true
-  targetHost: "inference"  # Changed from inference-lb to inference service
+  targetHost: "inference-http"  # Fixed: use inference-http service name
   targetPort: 8000  # Changed from 8023 (HAProxy) to 8000 (inference app)
   warmupOnly: "0"
   warmupSamples: "10"
@@ -539,14 +539,14 @@ locust:
     env:
       gatewayBase: "http://fastapi-app:8000"
       endpointDownload: "http://fastapi-app:8000/download/model-promotion/current.json"
-      predictUrl: "http://inference:8000/predict"  # Changed from inference-lb to inference
+      predictUrl: "http://inference-http:8000/predict"  # Fixed: use inference-http service
       predictWarmupDisable: "1"
       locustWaitForModel: "0"
       locustPreflightDisable: "1"
       kafkaBurst: "0"
       locustEnablePredictCache: "0"
       predictPayloadMode: "synthetic"
-      targetHost: "http://inference:8000"  # Changed from inference-lb to inference
+      targetHost: "http://inference-http:8000"  # Fixed: use inference-http service
     resources:
       requests:
         memory: "256Mi"

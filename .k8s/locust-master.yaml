@@ -28,14 +28,14 @@ spec:
         - name: LOCUST_LOCUSTFILE
           value: "/home/locust/locustfile.py"
         - name: TARGET_HOST
-          value: "http://inference:8000"
+          value: "http://inference-http:8000"
         command: ["locust"]
         args:
         - "--master"
         - "--master-bind-host=0.0.0.0"
         - "--master-bind-port=5557"
         - "--expect-workers=4"
-        - "--host=http://inference:8000"
+        - "--host=http://inference-http:8000"
         - "--loglevel=INFO"
         ports:
         - name: web
