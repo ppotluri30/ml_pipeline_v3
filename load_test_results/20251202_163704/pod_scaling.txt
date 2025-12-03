@@ -1,0 +1,9 @@
+NAME                             READY   STATUS    RESTARTS   AGE
+inference-http-d986cff8b-5tczg   1/1     Running   0          42m
+inference-http-d986cff8b-xqftc   1/1     Running   0          42m
+inference-http-d986cff8b-8fs95   0/1     Pending   0          0s
+inference-http-d986cff8b-kxc94   0/1     Pending   0          0s
+inference-http-d986cff8b-8fs95   0/1     Pending   0          0s
+inference-http-d986cff8b-kxc94   0/1     Pending   0          0s
+inference-http-d986cff8b-8fs95   0/1     ContainerCreating   0          0s
+inference-http-d986cff8b-kxc94   0/1     ContainerCreating   0          0s

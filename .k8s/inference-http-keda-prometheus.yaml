@@ -1,0 +1,70 @@
+---
+# KEDA ScaledObject for inference-http using Prometheus RPS trigger
+# Scales based on HTTP request rate (RPS per pod)
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: inference-http-rps-scaler
+  namespace: default
+  labels:
+    app: inference-http
+    scaler-type: prometheus-rps
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: inference-http
+  
+  # Replica bounds
+  minReplicaCount: 2
+  maxReplicaCount: 12
+  
+  # Polling and cooldown
+  pollingInterval: 15        # Check metrics every 15s
+  cooldownPeriod: 120        # Wait 2 min before scaling down
+  
+  # Advanced settings
+  advanced:
+    restoreToOriginalReplicaCount: false
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleUp:
+          stabilizationWindowSeconds: 30
+          policies:
+            - type: Pods
+              value: 4
+              periodSeconds: 30
+            - type: Percent
+              value: 100
+              periodSeconds: 30
+          selectPolicy: Max
+        scaleDown:
+          stabilizationWindowSeconds: 120
+          policies:
+            - type: Pods
+              value: 2
+              periodSeconds: 60
+          selectPolicy: Min
+  
+  triggers:
+    # Primary trigger: RPS per pod
+    # Formula: rate(inference_jobs_processed_total[1m]) / current_replicas
+    # Scale up when RPS per pod exceeds 20
+    - type: prometheus
+      metadata:
+        serverAddress: http://prometheus-server.default.svc.cluster.local:80
+        # Query: Total RPS across all pods
+        # KEDA divides by current replica count internally
+        query: sum(rate(inference_jobs_processed_total[1m]))
+        threshold: "20"                    # Target 20 RPS per pod
+        activationThreshold: "5"           # Start scaling at 5 total RPS
+      metricType: AverageValue             # Divides by pod count automatically
+    
+    # Secondary trigger: P95 latency (prevent degradation)
+    - type: prometheus
+      metadata:
+        serverAddress: http://prometheus-server.default.svc.cluster.local:80
+        query: histogram_quantile(0.95, sum(rate(inference_latency_seconds_bucket[2m])) by (le))
+        threshold: "1.5"                   # Scale up if P95 > 1.5s
+        activationThreshold: "0.5"         # Activate at 500ms P95
+      metricType: AverageValue

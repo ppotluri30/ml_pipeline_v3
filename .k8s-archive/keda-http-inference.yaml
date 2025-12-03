@@ -1,0 +1,33 @@
+---
+# KEDA HTTPScaledObject for inference-http
+# Scales based on request rate (pending requests per replica)
+apiVersion: http.keda.sh/v1alpha1
+kind: HTTPScaledObject
+metadata:
+  name: inference-http-scaler
+  namespace: default
+spec:
+  # Hosts to route - required for interceptor to know which requests to handle
+  hosts:
+  - inference-http.default.svc.cluster.local
+  - inference-http
+  
+  # Target workload to scale
+  scaleTargetRef:
+    name: inference-http
+    kind: Deployment
+    apiVersion: apps/v1
+    service: inference-http
+    port: 8000
+  
+  # Replica configuration
+  replicas:
+    min: 2
+    max: 12
+  
+  # Scaling parameters
+  # targetPendingRequests: scale up when queue exceeds this per replica
+  targetPendingRequests: 20
+  
+  # Scale down stabilization (cooldown)
+  scaledownPeriod: 60

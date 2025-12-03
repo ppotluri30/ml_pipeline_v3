@@ -1,0 +1,9 @@
+# Namespace for FLTS ML Pipeline
+# Default namespace is used for simplicity in Docker Desktop
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: default
+  labels:
+    name: flts-ml-pipeline
+    environment: development

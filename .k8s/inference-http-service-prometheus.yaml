@@ -1,0 +1,45 @@
+---
+# Normal ClusterIP Service for inference-http
+# No KEDA HTTP interceptor - direct traffic to pods
+apiVersion: v1
+kind: Service
+metadata:
+  name: inference-http
+  labels:
+    app: inference-http
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8000"
+    prometheus.io/path: "/metrics"
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+      protocol: TCP
+    - name: metrics
+      port: 9090
+      targetPort: 8000
+      protocol: TCP
+  selector:
+    app: inference-http
+---
+# ServiceMonitor for Prometheus Operator (if using)
+# Falls back to annotation-based discovery if not available
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: inference-http-monitor
+  labels:
+    app: inference-http
+    release: prometheus
+spec:
+  selector:
+    matchLabels:
+      app: inference-http
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 10s
+      scrapeTimeout: 5s

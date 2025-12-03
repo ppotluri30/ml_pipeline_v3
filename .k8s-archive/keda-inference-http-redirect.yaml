@@ -1,0 +1,18 @@
+---
+# ExternalName service to redirect inference-http traffic to KEDA proxy
+# This replaces the direct ClusterIP service to force traffic through KEDA interceptor
+apiVersion: v1
+kind: Service
+metadata:
+  name: inference-http
+  labels:
+    app: inference-http
+    managed-by: keda-http
+spec:
+  type: ExternalName
+  externalName: keda-add-ons-http-interceptor-proxy.keda.svc.cluster.local
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8080
+      protocol: TCP

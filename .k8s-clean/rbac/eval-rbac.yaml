@@ -1,0 +1,33 @@
+# RBAC for eval-promoter service account
+# Allows eval container to patch inference deployment for model reload
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: eval-promoter
+  namespace: default
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: eval-deployment-patcher
+  namespace: default
+rules:
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: ["get", "patch"]
+  resourceNames: ["inference-http"]  # Restrict to only inference-http deployment
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: eval-promoter-binding
+  namespace: default
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: eval-deployment-patcher
+subjects:
+- kind: ServiceAccount
+  name: eval-promoter
+  namespace: default

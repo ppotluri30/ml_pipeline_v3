@@ -1,0 +1,24 @@
+# inference-http Service
+# ClusterIP service for internal routing to inference-http pods
+# Exposes HTTP endpoint on port 8000 for predictions
+apiVersion: v1
+kind: Service
+metadata:
+  name: inference-http
+  namespace: default
+  labels:
+    app: inference-http
+    tier: serving
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8000"
+    prometheus.io/path: "/prometheus"
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+      protocol: TCP
+  selector:
+    app: inference-http

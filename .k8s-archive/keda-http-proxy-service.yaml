@@ -1,0 +1,20 @@
+---
+# ExternalName service to route traffic through KEDA HTTP interceptor
+# This allows workloads in the default namespace to use inference-http-proxy
+# which routes through the KEDA interceptor for request-rate based scaling
+apiVersion: v1
+kind: Service
+metadata:
+  name: inference-http-proxy
+  namespace: default
+  labels:
+    app: inference-http
+    role: keda-proxy
+spec:
+  type: ExternalName
+  externalName: keda-add-ons-http-interceptor-proxy.keda.svc.cluster.local
+  ports:
+  - port: 8080
+    targetPort: 8080
+    protocol: TCP
+    name: http

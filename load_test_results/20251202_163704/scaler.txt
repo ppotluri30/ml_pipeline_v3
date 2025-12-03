@@ -1,0 +1,241 @@
+﻿=== KEDA/HPA Status Log ===
+Started: 2025-12-02 16:37:04
+
+=== 16:37:06 ===
+
+--- ScaledObject Status ---
+NAME                        SCALETARGETKIND      SCALETARGETNAME   MIN   MAX   READY   ACTIVE   FALLBACK   PAUSED   TRIGGERS     AUTHENTICATIONS   AGE
+inference-http-rps-scaler   apps/v1.Deployment   inference-http    2     12    True    False    False      False    prometheus                     135m
+
+--- HPA Status ---
+NAME                                 REFERENCE                   TARGETS                     MINPODS   MAXPODS   REPLICAS   AGE
+keda-hpa-inference-http-rps-scaler   Deployment/inference-http   0/20 (avg), 0/1500m (avg)   2         12        2          135m
+
+--- Pod Count ---
+inference-http-d986cff8b-5tczg   1/1   Running   0     42m
+inference-http-d986cff8b-xqftc   1/1   Running   0     42m
+
+=== 16:37:12 ===
+
+--- ScaledObject Status ---
+NAME                        SCALETARGETKIND      SCALETARGETNAME   MIN   MAX   READY   ACTIVE   FALLBACK   PAUSED   TRIGGERS     AUTHENTICATIONS   AGE
+inference-http-rps-scaler   apps/v1.Deployment   inference-http    2     12    True    False    False      False    prometheus                     135m
+
+--- HPA Status ---
+NAME                                 REFERENCE                   TARGETS                     MINPODS   MAXPODS   REPLICAS   AGE
+keda-hpa-inference-http-rps-scaler   Deployment/inference-http   0/20 (avg), 0/1500m (avg)   2         12        2          135m
+
+--- Pod Count ---
+inference-http-d986cff8b-5tczg   1/1   Running   0     42m
+inference-http-d986cff8b-xqftc   1/1   Running   0     42m
+
+=== 16:37:18 ===
+
+--- ScaledObject Status ---
+NAME                        SCALETARGETKIND      SCALETARGETNAME   MIN   MAX   READY   ACTIVE   FALLBACK   PAUSED   TRIGGERS     AUTHENTICATIONS   AGE
+inference-http-rps-scaler   apps/v1.Deployment   inference-http    2     12    True    False    False      False    prometheus                     135m
+
+--- HPA Status ---
+NAME                                 REFERENCE                   TARGETS                     MINPODS   MAXPODS   REPLICAS   AGE
+keda-hpa-inference-http-rps-scaler   Deployment/inference-http   0/20 (avg), 0/1500m (avg)   2         12        2          135m
+
+--- Pod Count ---
+inference-http-d986cff8b-5tczg   1/1   Running   0     42m
+inference-http-d986cff8b-xqftc   1/1   Running   0     42m
+
+=== 16:37:23 ===
+
+--- ScaledObject Status ---
+NAME                        SCALETARGETKIND      SCALETARGETNAME   MIN   MAX   READY   ACTIVE   FALLBACK   PAUSED   TRIGGERS     AUTHENTICATIONS   AGE
+inference-http-rps-scaler   apps/v1.Deployment   inference-http    2     12    True    False    False      False    prometheus                     135m
+
+--- HPA Status ---
+NAME                                 REFERENCE                   TARGETS                     MINPODS   MAXPODS   REPLICAS   AGE
+keda-hpa-inference-http-rps-scaler   Deployment/inference-http   0/20 (avg), 0/1500m (avg)   2         12        2          135m
+
+--- Pod Count ---
+inference-http-d986cff8b-5tczg   1/1   Running   0     42m
+inference-http-d986cff8b-xqftc   1/1   Running   0     42m
+
+=== 16:37:29 ===
+
+--- ScaledObject Status ---
+NAME                        SCALETARGETKIND      SCALETARGETNAME   MIN   MAX   READY   ACTIVE   FALLBACK   PAUSED   TRIGGERS     AUTHENTICATIONS   AGE
+inference-http-rps-scaler   apps/v1.Deployment   inference-http    2     12    True    True     False      False    prometheus                     135m
+
+--- HPA Status ---
+NAME                                 REFERENCE                   TARGETS                     MINPODS   MAXPODS   REPLICAS   AGE
+keda-hpa-inference-http-rps-scaler   Deployment/inference-http   0/20 (avg), 0/1500m (avg)   2         12        2          135m
+
+--- Pod Count ---
+inference-http-d986cff8b-5tczg   1/1   Running   0     42m
+inference-http-d986cff8b-xqftc   1/1   Running   0     42m
+
+=== 16:37:35 ===
+
+--- ScaledObject Status ---
+NAME                        SCALETARGETKIND      SCALETARGETNAME   MIN   MAX   READY   ACTIVE   FALLBACK   PAUSED   TRIGGERS     AUTHENTICATIONS   AGE
+inference-http-rps-scaler   apps/v1.Deployment   inference-http    2     12    True    True     False      False    prometheus                     136m
+
+--- HPA Status ---
+NAME                                 REFERENCE                   TARGETS                     MINPODS   MAXPODS   REPLICAS   AGE
+keda-hpa-inference-http-rps-scaler   Deployment/inference-http   0/20 (avg), 0/1500m (avg)   2         12        2          136m
+
+--- Pod Count ---
+inference-http-d986cff8b-5tczg   1/1   Running   0     42m
+inference-http-d986cff8b-xqftc   1/1   Running   0     42m
+
+=== 16:37:40 ===
+
+--- ScaledObject Status ---
+NAME                        SCALETARGETKIND      SCALETARGETNAME   MIN   MAX   READY   ACTIVE   FALLBACK   PAUSED   TRIGGERS     AUTHENTICATIONS   AGE
+inference-http-rps-scaler   apps/v1.Deployment   inference-http    2     12    True    True     False      False    prometheus                     136m
+
+--- HPA Status ---
+NAME                                 REFERENCE                   TARGETS                             MINPODS   MAXPODS   REPLICAS   AGE
+keda-hpa-inference-http-rps-scaler   Deployment/inference-http   18801m/20 (avg), 226m/1500m (avg)   2         12        2          136m
+
+--- Pod Count ---
+inference-http-d986cff8b-5tczg   1/1   Running   0     42m
+inference-http-d986cff8b-xqftc   1/1   Running   0     42m
+
+=== 16:37:46 ===
+
+--- ScaledObject Status ---
+NAME                        SCALETARGETKIND      SCALETARGETNAME   MIN   MAX   READY   ACTIVE   FALLBACK   PAUSED   TRIGGERS     AUTHENTICATIONS   AGE
+inference-http-rps-scaler   apps/v1.Deployment   inference-http    2     12    True    True     False      False    prometheus                     136m
+
+--- HPA Status ---
+NAME                                 REFERENCE                   TARGETS                             MINPODS   MAXPODS   REPLICAS   AGE
+keda-hpa-inference-http-rps-scaler   Deployment/inference-http   18801m/20 (avg), 226m/1500m (avg)   2         12        2          136m
+
+--- Pod Count ---
+inference-http-d986cff8b-5tczg   1/1   Running   0     42m
+inference-http-d986cff8b-xqftc   1/1   Running   0     42m
+
+=== 16:37:52 ===
+
+--- ScaledObject Status ---
+NAME                        SCALETARGETKIND      SCALETARGETNAME   MIN   MAX   READY   ACTIVE   FALLBACK   PAUSED   TRIGGERS     AUTHENTICATIONS   AGE
+inference-http-rps-scaler   apps/v1.Deployment   inference-http    2     12    True    True     False      False    prometheus                     136m
+
+--- HPA Status ---
+NAME                                 REFERENCE                   TARGETS                             MINPODS   MAXPODS   REPLICAS   AGE
+keda-hpa-inference-http-rps-scaler   Deployment/inference-http   18801m/20 (avg), 226m/1500m (avg)   2         12        2          136m
+
+--- Pod Count ---
+inference-http-d986cff8b-5tczg   1/1   Running   0     42m
+inference-http-d986cff8b-xqftc   1/1   Running   0     42m
+
+=== 16:37:57 ===
+
+--- ScaledObject Status ---
+NAME                        SCALETARGETKIND      SCALETARGETNAME   MIN   MAX   READY   ACTIVE   FALLBACK   PAUSED   TRIGGERS     AUTHENTICATIONS   AGE
+inference-http-rps-scaler   apps/v1.Deployment   inference-http    2     12    True    True     False      False    prometheus                     136m
+
+--- HPA Status ---
+NAME                                 REFERENCE                   TARGETS                             MINPODS   MAXPODS   REPLICAS   AGE
+keda-hpa-inference-http-rps-scaler   Deployment/inference-http   18801m/20 (avg), 226m/1500m (avg)   2         12        2          136m
+
+--- Pod Count ---
+inference-http-d986cff8b-5tczg   1/1   Running   0     42m
+inference-http-d986cff8b-xqftc   1/1   Running   0     42m
+
+=== 16:38:03 ===
+
+--- ScaledObject Status ---
+NAME                        SCALETARGETKIND      SCALETARGETNAME   MIN   MAX   READY   ACTIVE   FALLBACK   PAUSED   TRIGGERS     AUTHENTICATIONS   AGE
+inference-http-rps-scaler   apps/v1.Deployment   inference-http    2     12    True    True     False      False    prometheus                     136m
+
+--- HPA Status ---
+NAME                                 REFERENCE                   TARGETS                             MINPODS   MAXPODS   REPLICAS   AGE
+keda-hpa-inference-http-rps-scaler   Deployment/inference-http   18801m/20 (avg), 226m/1500m (avg)   2         12        2          136m
+
+--- Pod Count ---
+inference-http-d986cff8b-5tczg   1/1   Running   0     43m
+inference-http-d986cff8b-xqftc   1/1   Running   0     43m
+
+=== 16:38:09 ===
+
+--- ScaledObject Status ---
+NAME                        SCALETARGETKIND      SCALETARGETNAME   MIN   MAX   READY   ACTIVE   FALLBACK   PAUSED   TRIGGERS     AUTHENTICATIONS   AGE
+inference-http-rps-scaler   apps/v1.Deployment   inference-http    2     12    True    True     False      False    prometheus                     136m
+
+--- HPA Status ---
+NAME                                 REFERENCE                   TARGETS                             MINPODS   MAXPODS   REPLICAS   AGE
+keda-hpa-inference-http-rps-scaler   Deployment/inference-http   18801m/20 (avg), 226m/1500m (avg)   2         12        2          136m
+
+--- Pod Count ---
+inference-http-d986cff8b-5tczg   1/1   Running   0     43m
+inference-http-d986cff8b-xqftc   1/1   Running   0     43m
+
+=== 16:38:14 ===
+
+--- ScaledObject Status ---
+NAME                        SCALETARGETKIND      SCALETARGETNAME   MIN   MAX   READY   ACTIVE   FALLBACK   PAUSED   TRIGGERS     AUTHENTICATIONS   AGE
+inference-http-rps-scaler   apps/v1.Deployment   inference-http    2     12    True    True     False      False    prometheus                     136m
+
+--- HPA Status ---
+NAME                                 REFERENCE                   TARGETS                             MINPODS   MAXPODS   REPLICAS   AGE
+keda-hpa-inference-http-rps-scaler   Deployment/inference-http   18801m/20 (avg), 226m/1500m (avg)   2         12        2          136m
+
+--- Pod Count ---
+inference-http-d986cff8b-5tczg   1/1   Running   0     43m
+inference-http-d986cff8b-xqftc   1/1   Running   0     43m
+
+=== 16:38:20 ===
+
+--- ScaledObject Status ---
+NAME                        SCALETARGETKIND      SCALETARGETNAME   MIN   MAX   READY   ACTIVE   FALLBACK   PAUSED   TRIGGERS     AUTHENTICATIONS   AGE
+inference-http-rps-scaler   apps/v1.Deployment   inference-http    2     12    True    True     False      False    prometheus                     136m
+
+--- HPA Status ---
+NAME                                 REFERENCE                   TARGETS                             MINPODS   MAXPODS   REPLICAS   AGE
+keda-hpa-inference-http-rps-scaler   Deployment/inference-http   18801m/20 (avg), 226m/1500m (avg)   2         12        2          136m
+
+--- Pod Count ---
+inference-http-d986cff8b-5tczg   1/1   Running   0     43m
+inference-http-d986cff8b-xqftc   1/1   Running   0     43m
+
+=== 16:38:26 ===
+
+--- ScaledObject Status ---
+NAME                        SCALETARGETKIND      SCALETARGETNAME   MIN   MAX   READY   ACTIVE   FALLBACK   PAUSED   TRIGGERS     AUTHENTICATIONS   AGE
+inference-http-rps-scaler   apps/v1.Deployment   inference-http    2     12    True    True     False      False    prometheus                     136m
+
+--- HPA Status ---
+NAME                                 REFERENCE                   TARGETS                             MINPODS   MAXPODS   REPLICAS   AGE
+keda-hpa-inference-http-rps-scaler   Deployment/inference-http   18801m/20 (avg), 226m/1500m (avg)   2         12        2          136m
+
+--- Pod Count ---
+inference-http-d986cff8b-5tczg   1/1   Running   0     43m
+inference-http-d986cff8b-xqftc   1/1   Running   0     43m
+
+=== 16:38:31 ===
+
+--- ScaledObject Status ---
+NAME                        SCALETARGETKIND      SCALETARGETNAME   MIN   MAX   READY   ACTIVE   FALLBACK   PAUSED   TRIGGERS     AUTHENTICATIONS   AGE
+inference-http-rps-scaler   apps/v1.Deployment   inference-http    2     12    True    True     False      False    prometheus                     137m
+
+--- HPA Status ---
+NAME                                 REFERENCE                   TARGETS                             MINPODS   MAXPODS   REPLICAS   AGE
+keda-hpa-inference-http-rps-scaler   Deployment/inference-http   18801m/20 (avg), 226m/1500m (avg)   2         12        2          137m
+
+--- Pod Count ---
+inference-http-d986cff8b-5tczg   1/1   Running   0     43m
+inference-http-d986cff8b-xqftc   1/1   Running   0     43m
+
+=== 16:38:37 ===
+
+--- ScaledObject Status ---
+NAME                        SCALETARGETKIND      SCALETARGETNAME   MIN   MAX   READY   ACTIVE   FALLBACK   PAUSED   TRIGGERS     AUTHENTICATIONS   AGE
+inference-http-rps-scaler   apps/v1.Deployment   inference-http    2     12    True    True     False      False    prometheus                     137m
+
+--- HPA Status ---
+NAME                                 REFERENCE                   TARGETS                             MINPODS   MAXPODS   REPLICAS   AGE
+keda-hpa-inference-http-rps-scaler   Deployment/inference-http   18801m/20 (avg), 226m/1500m (avg)   2         12        2          137m
+
+--- Pod Count ---
+inference-http-d986cff8b-5tczg   1/1   Running   0     43m
+inference-http-d986cff8b-xqftc   1/1   Running   0     43m
+

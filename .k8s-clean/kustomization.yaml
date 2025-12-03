@@ -1,0 +1,33 @@
+# Kustomization for FLTS ML Pipeline
+# Deploy with: kubectl apply -k .k8s-clean/
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: default
+
+resources:
+  # RBAC (must be first)
+  - rbac/eval-rbac.yaml
+  
+  # Autoscaling configuration
+  - autoscaling/prometheus-scrape-config.yaml
+  - autoscaling/scaledobject.yaml
+  
+  # Inference services
+  - inference/deployment.yaml
+  - inference/service.yaml
+  
+  # Worker services
+  - worker/deployment.yaml
+  
+  # Pipeline services
+  - pipeline/eval.yaml
+  - pipeline/training.yaml
+  
+  # Load testing (optional - comment out if not needed)
+  - locust/configmap.yaml
+  - locust/master.yaml
+  - locust/worker.yaml
+
+# NOTE: Do not use commonLabels as it modifies spec.selector which is immutable
+# Labels are defined directly in each deployment file

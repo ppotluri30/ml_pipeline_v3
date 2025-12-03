@@ -1,0 +1,9 @@
+﻿Time_s,Pods,Event
+0,2,Baseline
+30,4,Scale-up triggered
+60,8,Continued scaling
+90,9,Peak load
+120,9,Load ends
+180,6,Scale-down started
+240,4,Gradual reduction
+300,2,Back to minReplicas
