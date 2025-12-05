@@ -1,0 +1,103 @@
+# Locust Scripts ConfigMap
+# Contains the locustfile.py for load testing inference-http
+# GKE Compatible - standard ConfigMap
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: locust-scripts
+  namespace: default
+  labels:
+    app: locust
+data:
+  locustfile.py: |
+    """
+    Locust load test for FLTS inference service that generates realistic
+    synthetic payloads with unique timestamps on every request.
+    """
+    import datetime as dt
+    import json
+    import os
+
+    from locust import HttpUser, task, between
+
+    ROWS = int(os.getenv("LOCUST_PAYLOAD_ROWS", "30"))
+    STEP_MINUTES = max(1, int(os.getenv("LOCUST_TS_STEP_MINUTES", "1")))
+    PREDICT_WAIT_MIN = float(os.getenv("PREDICT_USER_WAIT_MIN", "1"))
+    PREDICT_WAIT_MAX = max(PREDICT_WAIT_MIN, float(os.getenv("PREDICT_USER_WAIT_MAX", "2")))
+    DEBUG_PAYLOAD = os.getenv("DEBUG_LOCUST_PAYLOAD", "0") in {"1", "true", "TRUE"}
+    LOG_PAYLOAD = os.getenv("LOG_PREDICT_PAYLOAD", "0") in {"1", "true", "TRUE"}
+    OUTPUT_LEN = max(1, int(os.getenv("PREDICT_OUTPUT_LEN", "1")))
+
+    _PAYLOAD_SEQ = 0
+
+
+    def _build_predict_payload() -> tuple[int, dict]:
+        """Construct a synthetic prediction payload with unique timestamps."""
+        global _PAYLOAD_SEQ
+        seq = _PAYLOAD_SEQ
+        _PAYLOAD_SEQ += 1
+
+        base_start = dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
+        base_time = base_start + dt.timedelta(minutes=seq * STEP_MINUTES)
+        ts_values = [
+            (base_time + dt.timedelta(minutes=i * STEP_MINUTES)).strftime("%Y-%m-%dT%H:%M:%S")
+            for i in range(ROWS)
+        ]
+
+        base_seq = [float(i % 50) for i in range(ROWS)]
+        data = {
+            "ts": ts_values,
+            "down": [v * 1_000_000.0 + 5_000_000.0 for v in base_seq],
+            "up": [v * 1000.0 + 1000.0 for v in base_seq],
+            "rnti_count": [2000.0 + v for v in base_seq],
+            "mcs_down": [10.0 + (v % 5) for v in base_seq],
+            "mcs_down_var": [50.0 + (v * 0.5) for v in base_seq],
+            "mcs_up": [12.0 + (v % 4) for v in base_seq],
+            "mcs_up_var": [40.0 + (v * 0.4) for v in base_seq],
+            "rb_down": [0.05 + (v * 0.001) for v in base_seq],
+            "rb_down_var": [1e-7 + (v * 1e-9) for v in base_seq],
+            "rb_up": [0.01 + (v * 0.0005) for v in base_seq],
+            "rb_up_var": [5e-8 + (v * 1e-9) for v in base_seq],
+        }
+
+        payload = {"index_col": "ts", "inference_length": OUTPUT_LEN, "data": data}
+
+        if DEBUG_PAYLOAD:
+            unique_count = len(set(ts_values))
+            if unique_count != len(ts_values):
+                raise ValueError(f"Non-unique timestamps detected: seq={seq}")
+
+        return seq, payload
+
+
+    class InferenceUser(HttpUser):
+        wait_time = between(PREDICT_WAIT_MIN, PREDICT_WAIT_MAX)
+
+        @task
+        def predict(self):
+            seq, payload = _build_predict_payload()
+            with self.client.post(
+                "/predict",
+                json=payload,
+                name="/predict",
+                catch_response=True,
+            ) as response:
+                status_code = getattr(response, "status_code", None)
+
+                if LOG_PAYLOAD and response is not None:
+                    context = getattr(response, "context", None)
+                    if context is None:
+                        try:
+                            response.context = {}
+                            context = response.context
+                        except Exception:
+                            context = None
+                    if context is not None:
+                        context["request_json"] = payload
+
+                if status_code == 200:
+                    response.success()
+                else:
+                    sample = payload["data"]["ts"][:3]
+                    response.failure(f"Unexpected status {status_code} sample_ts={sample}")

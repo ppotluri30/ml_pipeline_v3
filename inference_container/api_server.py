@@ -681,6 +681,40 @@ def ready():
         return Response(content=json.dumps({"status": "ready"}), media_type="application/json", status_code=200)
     return Response(content=json.dumps({"status": "not_ready"}), media_type="application/json", status_code=503)
 
+
+@app.get("/internal/ready")
+def internal_ready():
+    """Internal readiness endpoint for Kubernetes - only returns 200 after warm-up completes.
+    
+    This endpoint is used by Kubernetes readinessProbe to ensure pods only receive
+    traffic after the model is loaded AND warm-up inference is complete.
+    """
+    try:
+        from inference_http import is_warmup_ready, get_warmup_status
+        warmup_ready = is_warmup_ready()
+        status = get_warmup_status()
+    except ImportError:
+        # Fallback if running in legacy mode without inference_http
+        try:
+            inf = _get_inferencer()
+            warmup_ready = inf.current_model is not None
+            status = {"warmup_ready": warmup_ready, "model_loaded": warmup_ready}
+        except Exception:
+            warmup_ready = False
+            status = {"warmup_ready": False, "error": "inferencer_unavailable"}
+    
+    if warmup_ready:
+        return Response(
+            content=json.dumps({"status": "ready", **status}), 
+            media_type="application/json", 
+            status_code=200
+        )
+    return Response(
+        content=json.dumps({"status": "not_ready", **status}), 
+        media_type="application/json", 
+        status_code=503
+    )
+
 def _get_inferencer():
     # Import the shared Inferencer instance from either inference_http (HTTP-only mode)
     # or main (legacy Kafka+HTTP mode). HTTP-only mode is detected via absence of

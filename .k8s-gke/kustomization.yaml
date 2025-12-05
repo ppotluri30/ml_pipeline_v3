@@ -1,0 +1,78 @@
+# Kustomization for FLTS ML Pipeline on GKE
+# Deploy with: kubectl apply -k .k8s-gke/
+#
+# GKE Cluster: aiml-dev-xhckg-gke-cluster
+# Region: europe-west3
+# Project: saas-nokia-an-rnd
+#
+# Prerequisites:
+#   1. Artifact Registry writer permissions (already configured)
+#   2. Push images to Artifact Registry:
+#      docker tag inference-http:latest europe-west3-docker.pkg.dev/saas-nokia-an-rnd/flts-ml/inference-http:latest
+#      docker push europe-west3-docker.pkg.dev/saas-nokia-an-rnd/flts-ml/inference-http:latest
+#
+# Note: This deployment uses CPU-based HPA (no KEDA or cluster-admin required)
+#
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: default
+
+resources:
+  # Backend infrastructure services
+  - backend/kafka.yaml
+  - backend/minio.yaml
+  - backend/minio-init-job.yaml
+  - backend/mlflow.yaml
+  - backend/fastapi-app.yaml
+  
+  # CPU-based Autoscaling (standard HPA - no cluster-admin needed)
+  - autoscaling/hpa-inference-http.yaml
+  - autoscaling/hpa-inference-worker.yaml
+  
+  # Pipeline services (preprocess, training, eval)
+  - pipeline/preprocess.yaml
+  - pipeline/training.yaml
+  - pipeline/eval.yaml
+  
+  # Inference services
+  - inference/deployment.yaml
+  - inference/service.yaml
+  
+  # Worker services
+  - worker/deployment.yaml
+  
+  # Load testing (optional - comment out if not needed)
+  - locust/configmap.yaml
+  - locust/master.yaml
+  - locust/worker.yaml
+
+# Image transformation for GKE Artifact Registry (europe-west3, saas-nokia-an-rnd)
+images:
+  - name: inference-http
+    newName: europe-west3-docker.pkg.dev/saas-nokia-an-rnd/aiml-dev-registry/inference-http
+    newTag: latest
+  - name: inference-worker
+    newName: europe-west3-docker.pkg.dev/saas-nokia-an-rnd/aiml-dev-registry/inference-worker
+    newTag: latest
+  - name: train
+    newName: europe-west3-docker.pkg.dev/saas-nokia-an-rnd/aiml-dev-registry/train
+    newTag: latest
+  - name: nonml
+    newName: europe-west3-docker.pkg.dev/saas-nokia-an-rnd/aiml-dev-registry/nonml
+    newTag: latest
+  - name: eval
+    newName: europe-west3-docker.pkg.dev/saas-nokia-an-rnd/aiml-dev-registry/eval
+    newTag: latest
+  - name: preprocess
+    newName: europe-west3-docker.pkg.dev/saas-nokia-an-rnd/aiml-dev-registry/preprocess
+    newTag: latest
+  - name: mlflow
+    newName: europe-west3-docker.pkg.dev/saas-nokia-an-rnd/aiml-dev-registry/mlflow
+    newTag: latest
+  - name: fastapi-app
+    newName: europe-west3-docker.pkg.dev/saas-nokia-an-rnd/aiml-dev-registry/fastapi-app
+    newTag: latest
+
+# NOTE: Do not use commonLabels as it modifies spec.selector which is immutable
+# Labels are defined directly in each deployment file

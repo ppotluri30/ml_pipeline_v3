@@ -1,0 +1,94 @@
+# inference-http Deployment
+# HTTP-only inference service for serving predictions via REST API
+# Scaled by KEDA based on Prometheus RPS and latency metrics
+# GKE Compatible - uses standard Kubernetes APIs
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: inference-http
+  namespace: default
+  labels:
+    app: inference-http
+    component: http-server
+    tier: serving
+spec:
+  replicas: 3  # Managed by HPA (minReplicas=3 for high availability)
+  selector:
+    matchLabels:
+      app: inference-http
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 2
+      maxUnavailable: 1
+  template:
+    metadata:
+      labels:
+        app: inference-http
+        component: http-server
+        tier: serving
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/prometheus"
+    spec:
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: inference-http
+          # Image will be replaced by kustomize to: REGION-docker.pkg.dev/PROJECT_ID/REPO/inference-http:TAG
+          image: inference-http:latest
+          imagePullPolicy: Always  # Changed from IfNotPresent for GKE to pull from registry
+          ports:
+            - containerPort: 8000
+              name: http
+              protocol: TCP
+          env:
+            # MinIO/S3 credentials - REPLACE with GCS or your object storage credentials
+            - name: AWS_ACCESS_KEY_ID
+              value: minioadmin
+            - name: AWS_SECRET_ACCESS_KEY
+              value: minioadmin
+            # Internal service URLs (ClusterIP services within GKE)
+            - name: GATEWAY_URL
+              value: http://fastapi-app:8000
+            - name: MLFLOW_S3_ENDPOINT_URL
+              value: http://minio:9000
+            - name: MLFLOW_TRACKING_URI
+              value: http://mlflow:5000
+            - name: IDENTIFIER
+              value: default
+            # Uvicorn settings
+            - name: UVICORN_WORKERS
+              value: "2"
+            - name: UVICORN_TIMEOUT_KEEP_ALIVE
+              value: "60"
+            - name: UVICORN_LIMIT_CONCURRENCY
+              value: "1000"
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "768Mi"
+            limits:
+              cpu: "2000m"
+              memory: "1500Mi"
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /internal/ready
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 6
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "sleep 5"]
+      restartPolicy: Always

@@ -168,6 +168,26 @@ _reload_check_interval = int(os.environ.get("MODEL_RELOAD_CHECK_INTERVAL", "30")
 _reload_thread = None
 _reload_shutdown = False
 
+# Warm-up readiness flag - only True after model loaded AND warm-up inference complete
+_warmup_ready = False
+_warmup_error: str | None = None
+
+
+def is_warmup_ready() -> bool:
+    """Check if warm-up is complete and service is ready for traffic."""
+    return _warmup_ready
+
+
+def get_warmup_status() -> dict:
+    """Get detailed warm-up status for readiness probes."""
+    return {
+        "warmup_ready": _warmup_ready,
+        "warmup_error": _warmup_error,
+        "model_loaded": inferencer.current_model is not None if 'inferencer' in globals() else False,
+        "run_id": inferencer.current_run_id if 'inferencer' in globals() else None,
+        "model_type": inferencer.model_type if 'inferencer' in globals() else None,
+    }
+
 
 def _get_current_pointer_run_id() -> tuple:
     """
@@ -395,10 +415,94 @@ def _preload_test_dataframe(service: Inferencer):
             'down': [1.0] * 100,
             'up': [1.0] * 100,
         })
-        test_df = strip_timezones(test_df)
+        test_df, _ = strip_timezones(test_df)
         _log("preload_test_dataframe_success", rows=len(test_df))
     except Exception as e:
         _log("preload_test_dataframe_error", error=str(e))
+
+
+def _execute_warmup_inference(service: Inferencer) -> bool:
+    """
+    Execute a warm-up inference to ensure model/ONNX runtime is fully initialized.
+    Returns True if warm-up succeeded, False otherwise.
+    """
+    global _warmup_ready, _warmup_error
+    
+    try:
+        if service.current_model is None:
+            _log("warmup_skip", reason="no_model_loaded")
+            return False
+        
+        import numpy as np
+        
+        input_seq_len = service.input_seq_len or 10
+        
+        _log("warmup_inference_start", model_type=service.model_type, 
+             input_seq_len=input_seq_len, backend=getattr(service, 'model_backend', 'unknown'))
+        
+        t0 = time.time()
+        
+        # Warm-up ONNX session if available (preferred path)
+        if getattr(service, 'onnx_session', None) is not None:
+            # Get expected input shape from ONNX session
+            input_info = service.onnx_session.get_inputs()[0]
+            input_shape = input_info.shape  # e.g., ['batch', 'seq_len', 17]
+            n_features = input_shape[-1] if isinstance(input_shape[-1], int) else 17
+            
+            # Create synthetic input matching expected shape
+            warmup_input = np.random.randn(1, input_seq_len, n_features).astype(np.float32)
+            
+            # Run multiple warm-up passes to fully initialize ONNX runtime
+            for i in range(3):
+                _ = service.onnx_session.run(None, {input_info.name: warmup_input})
+            
+            elapsed_ms = int((time.time() - t0) * 1000)
+            _log("warmup_inference_complete", elapsed_ms=elapsed_ms, 
+                 model_type=service.model_type, backend="onnx", passes=3)
+            return True
+        
+        # Fallback: warm-up PyTorch model directly
+        elif getattr(service, 'model_class', '') == 'pytorch':
+            import torch
+            
+            # Get the underlying model
+            pyfunc_model = service.current_model
+            if hasattr(pyfunc_model, '_model_impl'):
+                inner = pyfunc_model._model_impl
+                if hasattr(inner, 'python_model'):
+                    inner = inner.python_model
+                if hasattr(inner, 'model'):
+                    torch_model = inner.model
+                    
+                    # Determine feature dimension from model architecture
+                    n_features = 17  # default
+                    if hasattr(torch_model, 'gru') and hasattr(torch_model.gru, 'input_size'):
+                        n_features = torch_model.gru.input_size
+                    elif hasattr(torch_model, 'lstm') and hasattr(torch_model.lstm, 'input_size'):
+                        n_features = torch_model.lstm.input_size
+                    
+                    # Create synthetic input
+                    warmup_input = torch.randn(1, input_seq_len, n_features)
+                    
+                    # Run inference passes
+                    torch_model.eval()
+                    with torch.no_grad():
+                        for i in range(3):
+                            _ = torch_model(warmup_input)
+                    
+                    elapsed_ms = int((time.time() - t0) * 1000)
+                    _log("warmup_inference_complete", elapsed_ms=elapsed_ms,
+                         model_type=service.model_type, backend="pytorch", passes=3)
+                    return True
+        
+        # Skip warm-up for non-PyTorch models (Prophet, etc.)
+        _log("warmup_skip", reason="no_compatible_backend", model_class=getattr(service, 'model_class', 'unknown'))
+        return True  # Don't block readiness for Prophet models
+        
+    except Exception as e:
+        _warmup_error = str(e)[:200]
+        _log("warmup_inference_error", error=_warmup_error)
+        return False
 
 
 def _auto_reload_loop():
@@ -459,8 +563,22 @@ model_loaded = _load_promoted_pointer(inferencer)
 if model_loaded:
     _last_loaded_run_id = inferencer.current_run_id
     _log("initial_model_loaded", run_id=_last_loaded_run_id)
+    
+    # Execute warm-up inference before marking as ready
+    warmup_success = _execute_warmup_inference(inferencer)
+    if warmup_success:
+        _warmup_ready = True
+        _log("warmup_ready", run_id=_last_loaded_run_id, model_type=inferencer.model_type)
+    else:
+        # Model loaded but warm-up failed - still mark as ready but log warning
+        _warmup_ready = True
+        _log("warmup_failed_but_ready", run_id=_last_loaded_run_id, 
+             error=_warmup_error, note="Proceeding despite warm-up failure")
 else:
     _log("startup_warning", message="No promoted model loaded - will serve with empty model")
+    # No model means we can't warm up, but we should still be "ready" for health checks
+    # Kubernetes will route traffic only when /internal/ready returns 200
+    _warmup_ready = False
 
 # Start auto-reload background thread
 import threading

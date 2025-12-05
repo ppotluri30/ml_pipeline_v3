@@ -1,0 +1,108 @@
+# Locust Master Deployment and Service
+# Load testing orchestrator for inference-http service
+# GKE Compatible - uses LoadBalancer for web UI access
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: locust-master
+  namespace: default
+  labels:
+    app: locust
+    role: master
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: locust
+      role: master
+  template:
+    metadata:
+      labels:
+        app: locust
+        role: master
+    spec:
+      containers:
+      - name: locust
+        image: locustio/locust:latest
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: LOCUST_LOCUSTFILE
+          value: "/home/locust/locustfile.py"
+        - name: TARGET_HOST
+          value: "http://inference-http:8000"
+        command: ["locust"]
+        args:
+        - "--master"
+        - "--master-bind-host=0.0.0.0"
+        - "--master-bind-port=5557"
+        - "--expect-workers=4"
+        - "--host=http://inference-http:8000"
+        - "--loglevel=INFO"
+        ports:
+        - name: web
+          containerPort: 8089
+          protocol: TCP
+        - name: master-p1
+          containerPort: 5557
+          protocol: TCP
+        - name: master-p2
+          containerPort: 5558
+          protocol: TCP
+        volumeMounts:
+        - name: locust-scripts
+          mountPath: /home/locust
+        - name: results
+          mountPath: /results
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 8089
+          initialDelaySeconds: 15
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 8089
+          initialDelaySeconds: 10
+          periodSeconds: 10
+      volumes:
+      - name: locust-scripts
+        configMap:
+          name: locust-scripts
+      - name: results
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: locust-master
+  namespace: default
+  labels:
+    app: locust
+    role: master
+spec:
+  type: LoadBalancer  # Changed from NodePort for GKE external access
+  selector:
+    app: locust
+    role: master
+  ports:
+  - name: web
+    port: 8089
+    targetPort: 8089
+    protocol: TCP
+  - name: master-p1
+    port: 5557
+    targetPort: 5557
+    protocol: TCP
+  - name: master-p2
+    port: 5558
+    targetPort: 5558
+    protocol: TCP

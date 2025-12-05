@@ -74,19 +74,12 @@ consumer = create_consumer(MODEL_TRAINING_TOPIC, GROUP_ID)
 import requests
 
 def upload_json(bucket: str, object_name: str, payload: Dict[str, Any]):
-    tmp = tempfile.NamedTemporaryFile(delete=False)
-    try:
-        tmp.write(json.dumps(payload, separators=(",", ":")).encode())
-        tmp.flush()
-        tmp.close()
-        with open(tmp.name, "rb") as fh:
-            files = {"file": (object_name, fh, "application/json")}
-            r = requests.post(f"{GATEWAY_URL}/upload/{bucket}/{object_name}", files=files, timeout=30)
-            if r.status_code != 200:
-                raise RuntimeError(f"Upload failed {r.status_code}: {r.text}")
-    finally:
-        try: os.unlink(tmp.name)
-        except Exception: pass
+    """Upload JSON payload as raw bytes to the gateway (not multipart form-data)."""
+    json_bytes = json.dumps(payload, separators=(",", ":")).encode()
+    headers = {"Content-Type": "application/json"}
+    r = requests.post(f"{GATEWAY_URL}/upload/{bucket}/{object_name}", data=json_bytes, headers=headers, timeout=30)
+    if r.status_code != 200:
+        raise RuntimeError(f"Upload failed {r.status_code}: {r.text}")
 
 
 def compute_score(row: pd.Series) -> float:

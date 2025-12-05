@@ -1,0 +1,28 @@
+# inference-http Service
+# LoadBalancer service for external access to inference-http pods on GKE
+# Exposes HTTP endpoint on port 8000 for predictions
+# GKE will provision a Google Cloud Load Balancer automatically
+apiVersion: v1
+kind: Service
+metadata:
+  name: inference-http
+  namespace: default
+  labels:
+    app: inference-http
+    tier: serving
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8000"
+    prometheus.io/path: "/prometheus"
+    # GKE-specific annotations (optional - customize as needed)
+    # cloud.google.com/load-balancer-type: "External"  # Default is external
+    # cloud.google.com/neg: '{"ingress": true}'        # Enable NEG for better load balancing
+spec:
+  type: LoadBalancer  # Changed from ClusterIP for external GKE access
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+      protocol: TCP
+  selector:
+    app: inference-http
