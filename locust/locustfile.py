@@ -6,6 +6,13 @@ Goal:
     - Keep /healthz (10%) and a /download probe (10%) as background noise.
     - Record ALL requests (success + failure) with latency to JSONL for offline analysis.
 
+WARMUP FEATURE (Added 2025-12):
+    - Executes a hidden warmup phase BEFORE users spawn
+    - Uses raw 'requests' library (not Locust client) to avoid metric pollution
+    - Runs exactly once per test execution (UI or headless)
+    - Completely invisible to Locust metrics and UI
+    - Configurable via LOCUST_WARMUP_* environment variables
+
 Usage (from UI after `docker compose up -d locust`):
     Users: 25
     Spawn rate: 5
@@ -17,8 +24,13 @@ CSV Export: If you also want CSVs, launch Locust with `--csv /mnt/locust/results
 
 from locust import HttpUser, task, between, events
 import os, json, time, threading, uuid, random, datetime as dt
+import logging
 import posixpath
 from urllib.parse import urlsplit
+
+# Configure logging for warmup debug messages
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+warmup_logger = logging.getLogger("locust.warmup")
 
 # NOTE: We intentionally removed earlier endpoint discovery complexity.
 # The host will be provided via the Locust UI as http://inference-lb.
@@ -104,6 +116,19 @@ _download_ready = False
 _download_warm_attempts = 0
 _download_active_url: str | None = None
 _headless_auto_started = False
+
+# ============================================================================
+# WARMUP CONFIGURATION
+# Hidden warmup phase that runs BEFORE users spawn, invisible to metrics
+# ============================================================================
+WARMUP_REQUESTS = int(os.getenv("LOCUST_WARMUP_REQUESTS", "10"))
+WARMUP_TIMEOUT = float(os.getenv("LOCUST_WARMUP_TIMEOUT", "30"))
+WARMUP_DELAY_BETWEEN = float(os.getenv("LOCUST_WARMUP_DELAY", "0.1"))
+WARMUP_DISABLED = os.getenv("LOCUST_WARMUP_DISABLE", "0") in {"1", "true", "TRUE"}
+DEBUG_WARMUP = os.getenv("DEBUG_LOCUST_WARMUP", "0") in {"1", "true", "TRUE"}
+_WARMUP_COMPLETED = False
+_WARMUP_LOCK = threading.Lock()
+# ============================================================================
 
 # Predict payload handling. Auto mode will fall back to synthetic payloads when the
 # inference service reports no cached dataframe.
@@ -235,6 +260,153 @@ def _build_synthetic_predict_payload(
     }
 
 
+# ============================================================================
+# WARMUP EXECUTION - Runs BEFORE users spawn, invisible to metrics
+# ============================================================================
+
+def _build_warmup_payload(warmup_seq: int) -> dict:
+    """Build a warmup payload using a separate sequence from real traffic.
+    
+    Uses historical timestamps (2020-01-01) to clearly distinguish from real traffic.
+    """
+    rows_needed = max(_predict_input_len + max(_predict_output_len, 1) + 5, 16)
+    
+    # Use historical base time to distinguish warmup from real traffic
+    base_start = dt.datetime(2020, 1, 1, 0, 0, 0, tzinfo=dt.timezone.utc)
+    base_time = base_start + dt.timedelta(minutes=warmup_seq * rows_needed)
+    
+    times = [
+        (base_time + dt.timedelta(minutes=i)).strftime("%Y-%m-%dT%H:%M:%S")
+        for i in range(rows_needed)
+    ]
+    
+    base_seq = [float(i % 50) for i in range(rows_needed)]
+    data = {
+        "ts": times,
+        "down": [v * 1_000_000.0 + 5_000_000.0 for v in base_seq],
+        "up": [v * 1000.0 + 1000.0 for v in base_seq],
+        "rnti_count": [2000.0 + v for v in base_seq],
+        "mcs_down": [10.0 + (v % 5) for v in base_seq],
+        "mcs_down_var": [50.0 + (v * 0.5) for v in base_seq],
+        "mcs_up": [12.0 + (v % 4) for v in base_seq],
+        "mcs_up_var": [40.0 + (v * 0.4) for v in base_seq],
+        "rb_down": [0.05 + (v * 0.001) for v in base_seq],
+        "rb_down_var": [1e-7 + (v * 1e-9) for v in base_seq],
+        "rb_up": [0.01 + (v * 0.0005) for v in base_seq],
+        "rb_up_var": [5e-8 + (v * 1e-9) for v in base_seq],
+    }
+    
+    return {
+        "index_col": "ts",
+        "data": data,
+        "inference_length": max(1, _predict_output_len),
+    }
+
+
+def _execute_hidden_warmup(host: str) -> dict:
+    """
+    Execute warmup requests using raw 'requests' library (NOT Locust client).
+    
+    This function:
+    - Uses 'requests' (not Locust client) so metrics are NOT tracked
+    - Runs WARMUP_REQUESTS times against /predict
+    - Logs only to debug output, never to Locust UI/metrics
+    - Is completely invisible to the operator except in debug logs
+    - Returns a summary dict for logging purposes
+    
+    Args:
+        host: The target host URL (e.g., "http://inference-http:8000")
+    
+    Returns:
+        dict with warmup results (for JSONL logging only, not metrics)
+    """
+    global _WARMUP_COMPLETED
+    
+    result = {
+        "event": "warmup_execution",
+        "ts": time.time(),
+        "host": host,
+        "requested": WARMUP_REQUESTS,
+        "success": 0,
+        "failed": 0,
+        "skipped": False,
+        "disabled": False,
+        "latencies_ms": [],
+    }
+    
+    with _WARMUP_LOCK:
+        if _WARMUP_COMPLETED:
+            result["skipped"] = True
+            warmup_logger.info("[WARMUP] Already completed, skipping")
+            return result
+        
+        if WARMUP_DISABLED:
+            result["disabled"] = True
+            _WARMUP_COMPLETED = True
+            warmup_logger.info("[WARMUP] Warmup disabled via LOCUST_WARMUP_DISABLE=1")
+            return result
+        
+        # Import requests here to use raw HTTP (not Locust instrumented)
+        try:
+            import requests as raw_requests
+        except ImportError:
+            warmup_logger.error("[WARMUP] 'requests' library not available")
+            result["error"] = "requests library not available"
+            _WARMUP_COMPLETED = True
+            return result
+        
+        predict_url = f"{host.rstrip('/')}/predict"
+        warmup_logger.info(f"[WARMUP] Starting hidden warmup: {WARMUP_REQUESTS} requests to {predict_url}")
+        warmup_start = time.time()
+        
+        for i in range(WARMUP_REQUESTS):
+            payload = _build_warmup_payload(i)
+            req_start = time.time()
+            try:
+                resp = raw_requests.post(
+                    predict_url,
+                    json=payload,
+                    timeout=WARMUP_TIMEOUT,
+                    headers={"Content-Type": "application/json"}
+                )
+                req_time_ms = (time.time() - req_start) * 1000
+                result["latencies_ms"].append(round(req_time_ms, 1))
+                
+                if resp.status_code == 200:
+                    result["success"] += 1
+                    if DEBUG_WARMUP:
+                        warmup_logger.debug(f"[WARMUP] {i+1}/{WARMUP_REQUESTS}: OK ({req_time_ms:.0f}ms)")
+                else:
+                    result["failed"] += 1
+                    if DEBUG_WARMUP:
+                        warmup_logger.warning(f"[WARMUP] {i+1}/{WARMUP_REQUESTS}: HTTP {resp.status_code} ({req_time_ms:.0f}ms)")
+            except Exception as e:
+                result["failed"] += 1
+                req_time_ms = (time.time() - req_start) * 1000
+                result["latencies_ms"].append(round(req_time_ms, 1))
+                if DEBUG_WARMUP:
+                    warmup_logger.error(f"[WARMUP] {i+1}/{WARMUP_REQUESTS}: ERROR {e}")
+            
+            # Small delay between warmup requests to avoid overwhelming
+            if i < WARMUP_REQUESTS - 1:
+                time.sleep(WARMUP_DELAY_BETWEEN)
+        
+        result["total_time_s"] = round(time.time() - warmup_start, 2)
+        if result["latencies_ms"]:
+            result["avg_latency_ms"] = round(sum(result["latencies_ms"]) / len(result["latencies_ms"]), 1)
+        
+        warmup_logger.info(
+            f"[WARMUP] Complete: {result['success']}/{WARMUP_REQUESTS} OK, "
+            f"{result['failed']} failed, avg={result.get('avg_latency_ms', 0):.0f}ms, "
+            f"total={result['total_time_s']:.1f}s"
+        )
+        
+        _WARMUP_COMPLETED = True
+        return result
+
+# ============================================================================
+
+
 def _update_predict_context(input_len: int, output_len: int, has_df: bool):
     global _predict_input_len, _predict_output_len, _predict_has_df
     try:
@@ -345,28 +517,46 @@ def _is_headless():
 @events.test_start.add_listener
 def on_test_start(environment, **kw):  # noqa: D401
     """
-    SIMPLIFIED TEST START - No warmup, no health checks, no ping.
+    TEST START with hidden warmup phase.
     
-    Both UI and headless modes start immediately with valid predict requests.
+    Executes warmup requests using raw 'requests' library BEFORE users spawn.
+    Warmup is completely invisible to Locust metrics - uses separate HTTP client.
+    Works identically in both UI and headless modes.
     """
     global _headless_auto_started
     if _headless_auto_started:
         return
     _headless_auto_started = True
     
+    # Determine the target host for warmup
+    host = environment.host
+    if not host:
+        host = os.getenv("LOCUST_HOST", PREDICT_URL.rsplit("/", 1)[0] if "/" in PREDICT_URL else PREDICT_URL)
+    
+    warmup_logger.info(f"[WARMUP] test_start triggered, host={host}")
+    
+    # Resolve sequence lengths BEFORE warmup so payload sizes match
+    in_len = int(os.getenv("PREDICT_INPUT_LEN", "10"))
+    out_len = int(os.getenv("PREDICT_OUTPUT_LEN", "1"))
+    _update_predict_context(in_len, out_len, False)
+    
+    # Execute hidden warmup (uses raw requests, not Locust client)
+    warmup_result = _execute_hidden_warmup(host)
+    
+    # Log warmup result to JSONL (for debugging only, not metrics)
+    _append_jsonl(warmup_result)
+    
     _append_jsonl({
         "ts": time.time(),
         "event": "test_start_unified",
         "mode": "UI_AND_HEADLESS_IDENTICAL",
+        "warmup_completed": warmup_result.get("success", 0) > 0,
+        "warmup_success_count": warmup_result.get("success", 0),
+        "warmup_failed_count": warmup_result.get("failed", 0),
     })
     
     # Mark predict as ready globally
     globals()["_predict_ready"] = True
-    
-    # Resolve sequence lengths from environment or use defaults
-    in_len = int(os.getenv("PREDICT_INPUT_LEN", "10"))
-    out_len = int(os.getenv("PREDICT_OUTPUT_LEN", "1"))
-    _update_predict_context(in_len, out_len, False)
     
     _append_jsonl({
         "ts": time.time(),
@@ -375,7 +565,11 @@ def on_test_start(environment, **kw):  # noqa: D401
         "output_seq_len": out_len,
         "payload_mode": "SYNTHETIC_ONLY",
         "caching_disabled": True,
+        "warmup_requests": WARMUP_REQUESTS,
+        "warmup_disabled": WARMUP_DISABLED,
     })
+    
+    warmup_logger.info("[WARMUP] Warmup phase complete, starting real load test")
 
 _log_file_lock = threading.Lock()
 
