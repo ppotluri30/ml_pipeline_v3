@@ -26,7 +26,7 @@ MINIO_PROMOTION_BUCKET = os.environ.get("PROMOTION_BUCKET", "model-promotion")
 GATEWAY_URL = os.environ.get("GATEWAY_URL", "http://fastapi-app:8000")
 IDENTIFIER_FALLBACK = os.environ.get("IDENTIFIER", "")
 DLQ_TOPIC = os.environ.get("DLQ_MODEL_SELECTED", "DLQ-model-selected")
-SCORE_WEIGHTS = {"rmse": 0.5, "mae": 0.3, "mse": 0.2}
+SCORE_WEIGHTS = {"rmse": 0.6, "mae": 0.4}
 LOOKBACK_RUNS = int(os.environ.get("LOOKBACK_RUNS", "50"))
 
 # Expected model types for a pipeline config (comma separated env var). Default to GRU,LSTM,PROPHET.
@@ -85,8 +85,7 @@ def upload_json(bucket: str, object_name: str, payload: Dict[str, Any]):
 def compute_score(row: pd.Series) -> float:
     return (
         SCORE_WEIGHTS["rmse"] * float(row.get("metrics.test_rmse", float("inf"))) +
-        SCORE_WEIGHTS["mae"] * float(row.get("metrics.test_mae", float("inf"))) +
-        SCORE_WEIGHTS["mse"] * float(row.get("metrics.test_mse", float("inf")))
+        SCORE_WEIGHTS["mae"] * float(row.get("metrics.test_mae", float("inf")))
     )
 
 
